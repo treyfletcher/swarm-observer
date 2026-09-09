@@ -77,6 +77,19 @@ SPEC_MODEL_CALLS = 1_678
 INFLATION_TOLERANCE_PCT = 1.5
 RATIO_TOLERANCE = 0.05
 
+#: The real corpus's group-size histogram, as measured by the tester: how many
+#: collapsed responses were written as 1, 2, ... fragments. Checked in because
+#: spec flag S5's answer is "pin the ratio, and record the shape it came from" —
+#: an absolute token total from a growing corpus can never be re-measured, but a
+#: distribution can be reproduced synthetically, and the collapse ratio is a
+#: function of exactly this distribution.
+REAL_GROUP_SIZE_HISTOGRAM: dict[int, int] = {1: 896, 2: 578, 3: 189, 4: 21, 5: 3, 6: 1}
+
+#: The per-fragment cache-read figure the synthetic corpus repeats. Its value
+#: does not matter; that every fragment of one response repeats it is the whole
+#: point of R9.
+SYNTHETIC_CACHE_READ = 118_211
+
 
 def real_transcript_paths() -> tuple[Path, ...]:
     """The opt-in real-transcript corpus, or ``()`` when none is configured.
@@ -734,6 +747,68 @@ class TestRealTranscriptReconciliationR9:
         assert 1.5 < ratio < 1.8, ratio
         assert SPEC_CACHE_READ_INFLATION_PCT > SPEC_OUTPUT_INFLATION_PCT * 10
 
+    def test_r9_the_measurement_path_runs_on_a_synthetic_corpus_in_every_run(
+        self, tmp_path: Path
+    ) -> None:
+        """R9: the real-corpus assertions are exercised even with no real corpus.
+
+        Review finding. The opt-in test below is the only caller of
+        :func:`stats_for` and :func:`inflation_pct`, so in CI — where no corpus
+        is configured — the measurement path never executed and its no-corpus
+        arm asserted a tautology. A guard that runs one way locally and another
+        way in CI is this team's signature failure mode, wearing "always runs"
+        rather than "skipped" as a disguise.
+
+        The corpus below reproduces the real one's *group-size histogram* (the
+        answer to spec flag S5: pin the ratio, and record the shape it came
+        from). With every fragment of a response repeating its usage, the
+        cache-read inflation is exactly the record-to-call ratio minus one, so
+        the arithmetic can be asserted rather than approximated — and the
+        record-to-call ratio itself lands on the spec's.
+        """
+        records: list[dict[str, object]] = []
+        for size, groups in sorted(REAL_GROUP_SIZE_HISTOGRAM.items()):
+            for group in range(groups):
+                identity = f"{size}-{group}"
+                for fragment in range(size):
+                    records.append(
+                        f.assistant(
+                            f"u-{identity}-{fragment}",
+                            message_id=f"msg-{identity}",
+                            request_id=f"req-{identity}",
+                            usage_block=f.usage(
+                                output_tokens=483 if fragment == size - 1 else 6,
+                                cache_read=SYNTHETIC_CACHE_READ,
+                            ),
+                        )
+                    )
+        stats = stats_for([f.write_trace(tmp_path, records, name="agent-1")])
+
+        expected_records = sum(size * n for size, n in REAL_GROUP_SIZE_HISTOGRAM.items())
+        expected_groups = sum(REAL_GROUP_SIZE_HISTOGRAM.values())
+        assert (stats.assistant_records, stats.model_calls) == (expected_records, expected_groups)
+
+        cache_read = inflation_pct(
+            stats.naive_usage.cache_read_input_tokens,
+            stats.collapsed_usage.cache_read_input_tokens,
+        )
+        assert cache_read == pytest.approx(
+            (expected_records / expected_groups - 1) * 100.0, abs=0.01
+        )
+        assert stats.collapsed_usage.cache_read_input_tokens == (
+            SYNTHETIC_CACHE_READ * expected_groups
+        )
+        assert stats.naive_usage.cache_read_input_tokens == (
+            SYNTHETIC_CACHE_READ * expected_records
+        )
+
+        record_ratio = stats.assistant_records / stats.model_calls
+        spec_ratio = SPEC_ASSISTANT_RECORDS / SPEC_MODEL_CALLS
+        assert abs(record_ratio - spec_ratio) <= RATIO_TOLERANCE, (
+            f"the checked-in histogram no longer matches the spec's record ratio: "
+            f"{record_ratio:.4f} vs {spec_ratio:.4f}"
+        )
+
     def test_r9_real_transcripts_reproduce_the_spec_constants_when_available(self) -> None:
         """R9: the mapper's collapse on a real corpus, against the spec's numbers.
 
@@ -741,6 +816,10 @@ class TestRealTranscriptReconciliationR9:
         on the *ratios* rather than the absolute totals: the spec's corpus is a
         live session's transcript set that grows between measurements, so the
         record counts drift while the collapse ratio does not.
+
+        With no corpus this test measures nothing, which is why the synthetic
+        histogram above exists: the assertions below are the ones CI cannot
+        reach, and everything they depend on is exercised there instead.
         """
         paths = list(real_transcript_paths())
         if not paths:

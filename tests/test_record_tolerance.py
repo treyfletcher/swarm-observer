@@ -424,9 +424,12 @@ def _sweep(tmp_path: Path) -> list[tuple[str, str]]:
     return violations
 
 
-#: The positions where the tolerated path is known to raise today. Each is a
-#: reported defect, not an accepted behaviour; the strict-xfail test below is
-#: what fails when they are fixed, so this set cannot outlive them.
+#: The positions where the tolerated path is known to raise. The tester opened
+#: this as a debt ledger for BUG-1 and BUG-4; both are fixed, so it is empty and
+#: must stay empty — R4's tolerated half raising *anywhere* is a defect, not a
+#: state to record. It is kept rather than deleted so a future adapter change
+#: that reintroduces one has a named place to fail rather than a quiet
+#: temptation to widen an assertion.
 KNOWN_TOLERANCE_DEFECTS: frozenset[tuple[str, str]] = frozenset()
 
 
@@ -450,12 +453,17 @@ class TestToleratedPathCannotRaiseR4:
         """R4: the requirement itself — nothing tolerated may raise, anywhere."""
         assert _sweep(tmp_path) == []
 
-    def test_r4_every_known_defect_is_still_reproducible(self, tmp_path: Path) -> None:
-        """R4: a defect that quietly stopped reproducing must not stay on the list."""
-        observed = set(_sweep(tmp_path))
-        assert observed == KNOWN_TOLERANCE_DEFECTS, (
-            "KNOWN_TOLERANCE_DEFECTS is stale; no longer reproducible: "
-            f"{sorted(KNOWN_TOLERANCE_DEFECTS - observed)}"
+    def test_r4_the_defect_ledger_is_empty_and_stays_empty(self) -> None:
+        """R4: the tolerated half raising anywhere is a defect, never a recorded state.
+
+        The tester's version of this test asserted the ledger was still
+        *reproducible*, which was right while BUG-1 and BUG-4 were open. Both are
+        fixed, so the ledger's only correct content is nothing: re-opening it
+        would let a future crash position be written down instead of fixed.
+        """
+        assert not KNOWN_TOLERANCE_DEFECTS, (
+            "R4's tolerated half may not raise; fix the position rather than ledger it: "
+            f"{sorted(KNOWN_TOLERANCE_DEFECTS)}"
         )
 
     def test_r4_an_over_long_tolerated_value_never_reaches_an_exception(

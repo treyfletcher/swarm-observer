@@ -156,7 +156,7 @@ class CollapseStats:
 class _Group:
     """One collapsed API response: its fragments in canonical order (R9)."""
 
-    key: tuple[str, ...]
+    key: tuple[object, ...]
     fragments: list[ParsedRecord] = field(default_factory=list)
 
 
@@ -356,22 +356,40 @@ def _group_assistants(assistants: Sequence[ParsedRecord]) -> list[_Group]:
     A record with neither a ``requestId`` nor a ``message.id`` is its own group
     — there is nothing to join it to, and joining such records on their other
     fields would merge two genuinely separate calls.
+
+    Two things here decide whether a dollar figure is right, and both were
+    wrong before this was reviewed:
+
+    * **The solo key must be unique across the whole input set.** It used to be
+      ``("solo", record.uuid)``, and R4 makes a duplicate ``uuid`` fatal only
+      *within one file* — correctly, since agent files are written
+      independently. So two ungrouped model calls in two different files that
+      happened to share a uuid collapsed into one span, and R9's "usage from
+      the last fragment" then discarded the first call's tokens entirely. The
+      record's canonical index (R6) is unique by construction and orders the
+      same way, so it is the right identity.
+    * **An absent field is not an empty one.** ``message_id or ""`` mapped a
+      recorded ``requestId: ""`` and a missing ``requestId`` onto the same key
+      component, so a record carrying an empty string merged with one carrying
+      nothing. ``None`` is preserved in the key instead, which is what R9's
+      tuple of four recorded values actually says.
     """
-    groups: dict[tuple[str, ...], _Group] = {}
+    groups: dict[tuple[object, ...], _Group] = {}
     ordered: list[_Group] = []
     for item in assistants:
         record = item.record
         message_id = record.message.id if record.message is not None else None
         request_id = record.requestId
+        key: tuple[object, ...]
         if message_id is None and request_id is None:
-            key: tuple[str, ...] = ("solo", record.uuid)
+            key = ("solo", item.index)
         else:
             key = (
                 "grouped",
-                record.sessionId or "",
+                record.sessionId,
                 safe_agent_id(record.agentId),
-                message_id or "",
-                request_id or "",
+                message_id,
+                request_id,
             )
         group = groups.get(key)
         if group is None:

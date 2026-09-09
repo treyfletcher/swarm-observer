@@ -277,6 +277,117 @@ class TestCollapseMechanicsR9:
         assert len(calls) == 2
         assert [c.usage.output_tokens for c in calls if c.usage] == [1, 2]
 
+    def test_r9_ungrouped_records_in_two_files_with_one_uuid_stay_two_calls(
+        self, tmp_path: Path
+    ) -> None:
+        """R9: the solo-group identity must be unique across the whole input set.
+
+        Review finding, and the sharpest one in this increment: R4 makes a
+        duplicate ``uuid`` fatal *within one file* only — correctly, since agent
+        files are written independently — but the solo group key was the uuid.
+        Two ungrouped model calls in two files that shared a uuid therefore
+        collapsed into one span, and "usage from the last fragment" then threw
+        the first call's tokens away. Silent, and it moves a dollar figure down.
+        """
+        shared = {"message_id": None, "request_id": None, "agent_id": "a1"}
+        first = f.write_trace(
+            tmp_path,
+            [
+                f.assistant(
+                    "same-uuid",
+                    timestamp="2026-09-09T10:00:01.000Z",
+                    usage_block=f.usage(output_tokens=100, cache_read=7),
+                    **shared,  # type: ignore[arg-type]
+                )
+            ],
+            name="agent-1",
+        )
+        second = f.write_trace(
+            tmp_path,
+            [
+                f.assistant(
+                    "same-uuid",
+                    timestamp="2026-09-09T10:00:02.000Z",
+                    usage_block=f.usage(output_tokens=200, cache_read=9),
+                    **shared,  # type: ignore[arg-type]
+                )
+            ],
+            name="agent-2",
+        )
+        trace = load([first, second])
+        calls = [span for span in trace.spans if span.kind == "model_call"]
+        assert len(calls) == 2
+        assert sorted(call.usage.output_tokens for call in calls if call.usage) == [100, 200]
+
+        stats = stats_for([first, second])
+        assert stats.model_calls == 2
+        assert stats.collapsed_usage.output_tokens == 300
+        assert stats.collapsed_usage == stats.naive_usage, (
+            "nothing here is a fragment, so the two columns must agree"
+        )
+
+    @pytest.mark.parametrize("present", ["message_id", "request_id"])
+    def test_r9_one_half_of_the_join_key_is_enough_to_group(
+        self, tmp_path: Path, present: str
+    ) -> None:
+        """R9: "no requestId **and** no message.id" — one of the two still groups.
+
+        Review pin. Changing that ``and`` to an ``or`` — one character in the
+        collapse condition — left the whole suite green, because every fragment
+        in the corpus carries both. With ``or``, a real transcript whose
+        fragments carry only a ``requestId`` would stop collapsing and every
+        cache figure would inflate by ~55% with no test failing.
+        """
+        shared: dict[str, object] = {"message_id": None, "request_id": None, "agent_id": "a1"}
+        shared[present] = "shared-value"
+        records = [
+            f.assistant(
+                f"frag-{index}",
+                timestamp=f"2026-09-09T10:00:0{index + 1}.000Z",
+                usage_block=f.usage(output_tokens=6 if index < 2 else 483, cache_read=1_000),
+                **shared,  # type: ignore[arg-type]
+            )
+            for index in range(3)
+        ]
+        stats = stats_for([f.write_trace(tmp_path, records)])
+        assert stats.assistant_records == 3
+        assert stats.model_calls == 1, "one of the two join fields is enough to group"
+        assert stats.collapsed_usage.cache_read_input_tokens == 1_000
+        assert stats.naive_usage.cache_read_input_tokens == 3_000
+        assert stats.collapsed_usage.output_tokens == 483
+
+    def test_r9_an_empty_join_field_is_not_an_absent_one(self, tmp_path: Path) -> None:
+        """R9: the key is the four *recorded* values, and "" is a recorded value.
+
+        Review pin. ``request_id or ""`` mapped an empty string and an absent
+        field onto the same key component, so two unrelated responses that
+        happened to share a ``message.id`` merged when one carried
+        ``requestId: ""``.
+        """
+        records = [
+            f.assistant(
+                "a1",
+                timestamp="2026-09-09T10:00:01.000Z",
+                message_id="M",
+                request_id="",
+                usage_block=f.usage(output_tokens=10),
+            ),
+            f.assistant(
+                "a2",
+                timestamp="2026-09-09T10:00:02.000Z",
+                message_id="M",
+                request_id=None,
+                usage_block=f.usage(output_tokens=20),
+            ),
+        ]
+        calls = [
+            span
+            for span in load([f.write_trace(tmp_path, records)]).spans
+            if span.kind == "model_call"
+        ]
+        assert len(calls) == 2
+        assert [call.usage.output_tokens for call in calls if call.usage] == [10, 20]
+
     def test_r9_an_interleaved_multi_message_stream_collapses_per_response(
         self, tmp_path: Path
     ) -> None:

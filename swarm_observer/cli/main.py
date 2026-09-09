@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from typing import TextIO
 
 from swarm_observer import __version__
+from swarm_observer.ingest.source import TraceError
 from swarm_observer.model.trace import schema_document
 
 #: R39: the pinned exit codes. ``EXIT_FINDINGS`` and the analyze path that can
@@ -74,9 +75,19 @@ def run(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> i
     parser.error(f"unknown command: {args.command!r}")
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Console-script entry point (R39, R40)."""
-    return run(argv)
+def main(argv: Sequence[str] | None = None, *, stderr: TextIO | None = None) -> int:
+    """Console-script entry point (R11, R39, R40).
+
+    The only place a :class:`TraceError` becomes a process outcome: exactly one
+    line on stderr, no traceback, exit 2. Any subcommand added later inherits
+    that behaviour by construction rather than by remembering to wrap itself.
+    """
+    err = sys.stderr if stderr is None else stderr
+    try:
+        return run(argv)
+    except TraceError as exc:
+        err.write(exc.cli_line + "\n")
+        return EXIT_FAIL_CLOSED
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via `python -m`

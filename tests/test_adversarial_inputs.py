@@ -387,19 +387,29 @@ class TestHostileSidecarsR12:
         trace = ClaudeCodeSource(read_sidecars=True).load([path], DEFAULTS)
         assert trace.agents[0].agent_type is None
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=Exception,
-        reason=(
-            "BUG-2: a sidecar with a negative spawnDepth raises an un-sanitized "
-            "ValidationError out of load(); AgentRun.depth is ge=0 and the mapper "
-            "passes any int straight through"
-        ),
-    )
-    def test_r12_a_negative_sidecar_depth_is_dropped_not_fatal(self, tmp_path: Path) -> None:
-        """A1: a hostile depth must degrade to no metadata, like every other field."""
-        trace = self._with_sidecar(tmp_path, {"spawnDepth": -5, "description": "d"})
-        assert trace.agents[0].depth in (None, 0)
+    @pytest.mark.parametrize("depth", [-1, -5, -(2**63)])
+    def test_r12_a_negative_sidecar_depth_is_dropped_not_fatal(
+        self, tmp_path: Path, depth: int
+    ) -> None:
+        """A1: a hostile depth must degrade to no metadata, like every other field.
+
+        Review fix for BUG-2. ``AgentRun.depth`` is ``ge=0`` and the mapper used
+        to pass any non-bool int straight through, so a sidecar — which is not
+        covered by ``trace_id`` (R5) and therefore unusually cheap to tamper
+        with — could kill the run with an unsanitized ``ValidationError``. The
+        rest of the sidecar must still be read.
+        """
+        trace = self._with_sidecar(
+            tmp_path, {"spawnDepth": depth, "description": "d"}, name=f"agent-d{abs(depth)}"
+        )
+        assert trace.agents[0].depth is None
+        assert trace.agents[0].description == "d", "one bad key must not drop the sidecar"
+
+    def test_r12_a_non_negative_sidecar_depth_is_carried(self, tmp_path: Path) -> None:
+        """A1: the guard rejects only what ``AgentRun`` would reject, not every depth."""
+        for depth in (0, 1, 7):
+            trace = self._with_sidecar(tmp_path, {"spawnDepth": depth}, name=f"agent-ok-{depth}")
+            assert trace.agents[0].depth == depth
 
     def test_r12_a_wrong_typed_sidecar_depth_is_dropped(self, tmp_path: Path) -> None:
         """A1: a non-integer depth is absence, which is already handled."""

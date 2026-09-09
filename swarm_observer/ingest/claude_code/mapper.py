@@ -797,13 +797,27 @@ class _TraceBuilder:
                     agent_type=self._metadata_text(agent_type),
                     description=self._metadata_text(description) or "",
                     parent_agent_id=parent,
-                    depth=depth if isinstance(depth, int) and not isinstance(depth, bool) else None,
+                    depth=self._metadata_depth(depth),
                     span_seqs=tuple(seqs[agent_id]),
                     start=starts.get(agent_id),
                     end=ends.get(agent_id),
                 )
             )
         return tuple(runs)
+
+    def _metadata_depth(self, value: Any) -> int | None:
+        """Sidecar ``spawnDepth``, or ``None`` for anything ``AgentRun`` would reject.
+
+        A1 promises the sidecar's every failure mode is "no metadata".
+        ``AgentRun.depth`` is ``ge=0``, so a negative value — which a hostile or
+        simply buggy sidecar can carry, and which is not covered by ``trace_id``
+        (R5 hashes the named inputs only) — used to raise an unsanitized
+        ``ValidationError`` out of ``load()`` and kill the whole run. Every
+        constraint the field carries is checked here so the promise holds.
+        """
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value if value >= 0 else None
 
     def _metadata_text(self, value: Any) -> str | None:
         """Sidecar free text, previewed and capped — or dropped under no-previews."""

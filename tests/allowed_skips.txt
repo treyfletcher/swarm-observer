@@ -1,0 +1,14 @@
+# R49: the exact skip reasons this suite tolerates, one per line.
+#
+# The default is that there are none. A skip is a test that did not run, and
+# this project's predecessor shipped 148 tests that reported as skipped while
+# actually being broken. Anything skipped for a reason not listed here fails
+# the session.
+#
+# Note that the `live_narrator` marker (R41, R43) is *deselected* in CI, not
+# skipped, so it needs no entry: deselection removes the test before it runs
+# and is separately verified by a test asserting the marker deselects a
+# non-zero count. If you find yourself adding an entry, first ask whether the
+# test should instead be made to run offline.
+#
+# Format: one exact reason string per line. Blank lines and #-comments ignored.

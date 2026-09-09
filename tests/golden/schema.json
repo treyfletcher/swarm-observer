@@ -1,0 +1,512 @@
+{
+  "schema": {
+    "$defs": {
+      "AgentRun": {
+        "additionalProperties": false,
+        "description": "One agent's participation in the trace (R2).",
+        "properties": {
+          "agent_id": {
+            "pattern": "^[A-Za-z0-9_.:\\-]{1,64}$",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_index": {
+            "minimum": 0,
+            "title": "Agent Index",
+            "type": "integer"
+          },
+          "agent_type": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Agent Type"
+          },
+          "depth": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Depth"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Description",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End"
+          },
+          "parent_agent_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_.:\\-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Agent Id"
+          },
+          "span_seqs": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Span Seqs",
+            "type": "array"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start"
+          }
+        },
+        "required": [
+          "agent_id",
+          "agent_index"
+        ],
+        "title": "AgentRun",
+        "type": "object"
+      },
+      "ParseWarning": {
+        "additionalProperties": false,
+        "description": "An aggregated, content-free note about something the parser tolerated (R10).",
+        "properties": {
+          "code": {
+            "enum": [
+              "unknown_record_type",
+              "unknown_content_block",
+              "known_ignored_key",
+              "unknown_extra_key",
+              "timestamp_out_of_order",
+              "negative_duration",
+              "orphan_tool_result",
+              "dangling_tool_use",
+              "missing_usage",
+              "synthetic_model",
+              "compaction_boundary",
+              "api_error_record"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "count": {
+            "minimum": 1,
+            "title": "Count",
+            "type": "integer"
+          },
+          "detail": {
+            "default": "",
+            "pattern": "^[A-Za-z0-9_.:\\-]{0,64}$",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "count"
+        ],
+        "title": "ParseWarning",
+        "type": "object"
+      },
+      "SourceFile": {
+        "additionalProperties": false,
+        "description": "One input file's provenance (R2, R47).\n\n``name`` is a basename by construction: a directory component would leak the\nanalyst's filesystem into a report that is meant to be byte-identical\nbetween two machines (R47) and shareable (R34).",
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "records": {
+            "minimum": 0,
+            "title": "Records",
+            "type": "integer"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sha256",
+          "bytes",
+          "records"
+        ],
+        "title": "SourceFile",
+        "type": "object"
+      },
+      "Span": {
+        "additionalProperties": false,
+        "description": "One unit of observed work: a model call, a tool call, a message, an event (R2).",
+        "properties": {
+          "agent_id": {
+            "pattern": "^[A-Za-z0-9_.:\\-]{1,64}$",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SpanError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "extras_dropped": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Extras Dropped",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "model_call",
+              "tool_call",
+              "user_message",
+              "system_event"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{16}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Span Id"
+          },
+          "seq": {
+            "minimum": 0,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "span_id": {
+            "pattern": "^[0-9a-f]{16}$",
+            "title": "Span Id",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stop Reason"
+          },
+          "text_preview": {
+            "default": "",
+            "maxLength": 241,
+            "title": "Text Preview",
+            "type": "string"
+          },
+          "tool_input_digest": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{16}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Input Digest"
+          },
+          "tool_input_preview": {
+            "default": "",
+            "maxLength": 241,
+            "title": "Tool Input Preview",
+            "type": "string"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Name"
+          },
+          "tool_result_preview": {
+            "default": "",
+            "maxLength": 241,
+            "title": "Tool Result Preview",
+            "type": "string"
+          },
+          "tool_result_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "error",
+                  "missing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Result Status"
+          },
+          "tool_use_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Use Id"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "span_id",
+          "agent_id",
+          "kind",
+          "seq"
+        ],
+        "title": "Span",
+        "type": "object"
+      },
+      "SpanError": {
+        "additionalProperties": false,
+        "description": "A span-level failure: an enumerated code plus capped trace-derived text (R2).",
+        "properties": {
+          "code": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:\\-]{1,40}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "SpanError",
+        "type": "object"
+      },
+      "TokenUsage": {
+        "additionalProperties": false,
+        "description": "One model call's token accounting (R2).\n\nThe five components are exactly the ones the cost formula (R28) prices, and\nthey do not overlap: ``input_tokens`` as recorded already excludes cached\ntokens, and thinking tokens are already inside ``output_tokens``. Adding a\nsixth component here is a schema version bump precisely because it would\nchange what a dollar figure means.",
+        "properties": {
+          "cache_creation_1h_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Cache Creation 1H Tokens",
+            "type": "integer"
+          },
+          "cache_creation_5m_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Cache Creation 5M Tokens",
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Cache Read Input Tokens",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "TokenUsage",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "A whole normalized run: the only type anything downstream sees (R1, R2).",
+    "properties": {
+      "adapter": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z0-9_]+$",
+        "title": "Adapter",
+        "type": "string"
+      },
+      "agents": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/AgentRun"
+        },
+        "title": "Agents",
+        "type": "array"
+      },
+      "schema_version": {
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "source_files": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SourceFile"
+        },
+        "title": "Source Files",
+        "type": "array"
+      },
+      "spans": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Span"
+        },
+        "title": "Spans",
+        "type": "array"
+      },
+      "trace_id": {
+        "pattern": "^[0-9a-f]{16}$",
+        "title": "Trace Id",
+        "type": "string"
+      },
+      "warnings": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/ParseWarning"
+        },
+        "title": "Warnings",
+        "type": "array"
+      }
+    },
+    "required": [
+      "schema_version",
+      "trace_id",
+      "adapter"
+    ],
+    "title": "Trace",
+    "type": "object"
+  },
+  "schema_version": "1.0.0",
+  "title": "swarm-observer normalized trace"
+}

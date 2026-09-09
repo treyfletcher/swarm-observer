@@ -13,20 +13,9 @@
 #
 # Tester / later increments: delete each line as its requirement gains a test.
 #
-# Cited as of increment 1: R44, R45, R49, R50, R52.
+# Cited as of increment 1: R1-R12, R38 (schema subcommand), R44, R45,
+# R49, R50, R52 — deleted below by the tester as each gained a test.
 
-R1
-R2
-R3
-R4
-R5
-R6
-R7
-R8
-R9
-R10
-R11
-R12
 R13
 R14
 R15
@@ -52,7 +41,6 @@ R34
 R35
 R36
 R37
-R38
 R39
 R40
 R41

@@ -297,6 +297,32 @@ class TestNumericAndTemporalEdgesR2:
         assert start.tzinfo is not None
         assert start.utcoffset() is not None and start.utcoffset().total_seconds() == 0
 
+    @pytest.mark.parametrize(
+        "timestamp",
+        [
+            "9999-12-31T23:59:59.999-23:59",
+            "9999-12-31T23:59:59.999-14:00",
+            "0001-01-01T00:00:00.000+23:59",
+            "0001-01-01T00:00:00.000+14:00",
+        ],
+    )
+    def test_r11_a_timestamp_that_overflows_on_the_utc_shift_fails_closed(
+        self, tmp_path: Path, timestamp: str
+    ) -> None:
+        """R11: an instant that cannot be represented in UTC is fatal, not a crash.
+
+        Review finding. These parse cleanly — the RFC 3339 pattern admits them
+        and ``fromisoformat`` accepts them — and then ``astimezone(UTC)`` raises
+        ``OverflowError``, which is not a ``TraceError`` and was caught nowhere.
+        Forty bytes of trace against R11's "raises TraceError, one sanitized
+        line, no traceback".
+        """
+        path = f.write_trace(tmp_path, [f.user("u1", timestamp=timestamp)], name="agent-1")
+        with pytest.raises(TraceError) as raised:
+            ClaudeCodeSource(read_sidecars=False).load([path], DEFAULTS)
+        assert raised.value.code == "bad_timestamp"
+        assert timestamp not in raised.value.cli_line
+
     def test_r6_a_backwards_clock_never_produces_a_negative_duration(self, tmp_path: Path) -> None:
         """R6: "any computed duration that comes out negative is clamped to 0"."""
         shared = {"message_id": "m", "request_id": "r"}

@@ -222,7 +222,16 @@ def parse_timestamp(value: str, *, source: str, line: int) -> datetime:
         raise TraceParseError("bad_timestamp", source=source, line=line) from None
     if parsed.tzinfo is None:  # pragma: no cover - the pattern requires an offset
         raise TraceParseError("bad_timestamp", source=source, line=line, note="no offset")
-    return parsed.astimezone(UTC)
+    try:
+        return parsed.astimezone(UTC)
+    except (OverflowError, OSError):
+        # `9999-12-31T23:59:59-23:59` parses fine and then overflows on the shift
+        # to UTC, as does `0001-01-01T00:00:00+23:59` in the other direction.
+        # OverflowError is not a TraceError, so it escaped `load()` uncaught —
+        # a 40-byte trace string against R11's fail-closed contract.
+        raise TraceParseError(
+            "bad_timestamp", source=source, line=line, note="out of representable range"
+        ) from None
 
 
 def parse_record(raw: JsonRecord, *, source: str, index: int) -> ParsedRecord:

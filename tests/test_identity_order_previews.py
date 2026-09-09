@@ -28,7 +28,14 @@ from swarm_observer.ingest.claude_code.mapper import (
 )
 from swarm_observer.ingest.reader import compute_trace_id, digest_id
 from swarm_observer.ingest.source import IngestLimits
-from swarm_observer.ingest.text import ELLIPSIS, PREVIEW_LIMIT, canonical_json, preview, slug
+from swarm_observer.ingest.text import (
+    ELLIPSIS,
+    PREVIEW_LIMIT,
+    canonical_json,
+    preview,
+    preview_within,
+    slug,
+)
 from swarm_observer.model.trace import PREVIEW_MAX_CHARS, Trace
 
 from . import factories as f
@@ -364,6 +371,33 @@ class TestPreviewsR8:
         long = "a" * (PREVIEW_LIMIT + 1)
         assert preview(long) == "a" * PREVIEW_LIMIT + ELLIPSIS
         assert len(preview(long)) == PREVIEW_LIMIT + 1 == PREVIEW_MAX_CHARS
+
+    @pytest.mark.parametrize("cap", [1, 2, 3, 40, 200, 241])
+    def test_r8_preview_within_treats_its_cap_as_a_total_budget(self, cap: int) -> None:
+        """R8, R2: ``preview_within`` never returns more than its cap, ellipsis included.
+
+        Review ruling on spec flag S3, pinned as a property rather than argued:
+        ``preview``'s ``limit`` is R8's *text* budget (a truncated result is
+        ``limit + 1`` long), while a model field's ``max_length`` is a *total*
+        budget. Conflating the two is BUG-1. The boundary is checked at
+        ``cap - 1``, ``cap`` and ``cap + 1`` because that is where an off-by-one
+        lives.
+        """
+        for length in (0, 1, cap - 1, cap, cap + 1, cap * 10):
+            if length < 0:
+                continue
+            result = preview_within("a" * length, cap)
+            assert len(result) <= cap, (length, cap, len(result))
+            if length <= cap:
+                assert result == "a" * length, (length, cap)
+            else:
+                assert result.endswith(ELLIPSIS) and len(result) == cap, (length, cap)
+
+    def test_r8_preview_within_agrees_with_preview_when_nothing_is_truncated(self) -> None:
+        """R8: the two entry points differ only at the truncation boundary."""
+        text = "a normal preview"
+        assert preview_within(text, 200) == preview(text, 200) == text
+        assert preview_within(None, 200) == "" and preview_within("x", 0) == ""
 
     def test_r8_truncation_never_splits_a_multi_byte_character(self) -> None:
         """R8: "truncation is by Unicode code point, not bytes"."""

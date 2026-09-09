@@ -427,15 +427,7 @@ def _sweep(tmp_path: Path) -> list[tuple[str, str]]:
 #: The positions where the tolerated path is known to raise today. Each is a
 #: reported defect, not an accepted behaviour; the strict-xfail test below is
 #: what fails when they are fixed, so this set cannot outlive them.
-KNOWN_TOLERANCE_DEFECTS: frozenset[tuple[str, str]] = frozenset(
-    {
-        # BUG-1: preview(..., 200) can return 201 code points, over the field cap.
-        ("message.model", "ValidationError"),
-        ("message.stop_reason", "ValidationError"),
-        ("block.id", "ValidationError"),
-        ("block.name", "ValidationError"),
-    }
-)
+KNOWN_TOLERANCE_DEFECTS: frozenset[tuple[str, str]] = frozenset()
 
 
 class TestToleratedPathCannotRaiseR4:
@@ -454,13 +446,6 @@ class TestToleratedPathCannotRaiseR4:
             f"the tolerated path raised somewhere new: {sorted(observed - KNOWN_TOLERANCE_DEFECTS)}"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-1 and BUG-4: the tolerated half still raises un-sanitized "
-            "pydantic ValidationErrors — see KNOWN_TOLERANCE_DEFECTS"
-        ),
-    )
     def test_r4_the_tolerated_path_cannot_raise_at_all(self, tmp_path: Path) -> None:
         """R4: the requirement itself — nothing tolerated may raise, anywhere."""
         assert _sweep(tmp_path) == []
@@ -473,16 +458,20 @@ class TestToleratedPathCannotRaiseR4:
             f"{sorted(KNOWN_TOLERANCE_DEFECTS - observed)}"
         )
 
-    def test_r4_a_raising_tolerated_path_leaks_trace_bytes(self, tmp_path: Path) -> None:
-        """R4, R11: why the defects above matter — the crash quotes the trace.
+    def test_r4_an_over_long_tolerated_value_never_reaches_an_exception(
+        self, tmp_path: Path
+    ) -> None:
+        """R4, R11: the security consequence of the sweep, asserted rather than argued.
 
-        This is the security consequence, asserted rather than argued: the
-        exception that escapes carries the attacker's bytes, so the traceback the
-        CLI would print violates R11's "never a byte of file content".
+        This test used to assert the *defect* (BUG-1): a 300-character model id
+        escaped as a pydantic ``ValidationError`` whose message quoted the
+        attacker's bytes, which is exactly what R11's "never a byte of file
+        content" forbids. It now asserts the fixed behaviour, so a regression to
+        the ellipsis off-by-one fails here with the reason spelled out.
         """
         record = f.assistant("a1", usage_block=f.usage(), model="PAYLOAD-" + "A" * 300)
-        path = f.write_trace(tmp_path, [record])
-        with pytest.raises(Exception) as raised:
-            load(path)
-        assert not isinstance(raised.value, TraceError)
-        assert "PAYLOAD-" in str(raised.value)
+        trace = load(f.write_trace(tmp_path, [record]))
+        model = trace.spans[0].model
+        assert model is not None
+        assert len(model) == 200, "the field cap is a total budget, ellipsis included"
+        assert model.endswith("…")

@@ -140,14 +140,6 @@ class TestHostileModelAndToolNamesR2:
         trace = load([record], tmp_path, name=f"agent-{length}")
         assert trace.spans[0].model == ("m" * length or None)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-1: preview(value, DETAIL_MAX_CHARS) returns 201 code points when it "
-            "truncates, but Span.model caps at 200, so an over-long model id raises an "
-            "un-sanitized ValidationError that quotes the trace"
-        ),
-    )
     @pytest.mark.parametrize("field", ["model", "stop_reason"])
     def test_r2_an_over_long_structural_field_is_truncated_not_fatal(
         self, tmp_path: Path, field: str
@@ -159,10 +151,48 @@ class TestHostileModelAndToolNamesR2:
         value = getattr(trace.spans[0], field)
         assert value is not None and len(value) <= 200
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="BUG-1: the same off-by-one on Span.tool_name and Span.tool_use_id",
-    )
+    @pytest.mark.parametrize("length", [199, 200, 201, 202, 2_000])
+    def test_r2_every_capped_field_holds_at_the_cap_boundary(
+        self, tmp_path: Path, length: int
+    ) -> None:
+        """R2, R11: every 200-capped trace-derived field, swept across its boundary.
+
+        Review pin for BUG-1. The previous tests probed one field at 300
+        characters; the defect was an off-by-one, so the interesting lengths are
+        ``cap - 1``, ``cap``, ``cap + 1`` and ``cap + 2``. Sweeping *every*
+        capped position rather than one keeps the pin honest against a future
+        call site that reaches for ``preview`` instead of ``preview_within``.
+        """
+        payload = "Z" * length
+        block = f.tool_use_block(payload, payload, {})
+        records = [
+            f.assistant(
+                "a1",
+                model=payload,
+                stop_reason=payload,
+                content=[block],
+                usage_block=f.usage(),
+            ),
+            f.api_error("e1", status=payload),
+        ]
+        path = f.write_trace(tmp_path, records, name=f"agent-{length}")
+        sidecar = path.with_suffix(".meta.json")
+        sidecar.write_text(
+            json.dumps({"description": payload, "agentType": payload}), encoding="utf-8"
+        )
+        trace = ClaudeCodeSource(read_sidecars=True).load([path], DEFAULTS)
+
+        capped: list[str | None] = []
+        for span in trace.spans:
+            capped += [span.model, span.stop_reason, span.tool_name, span.tool_use_id]
+            if span.error is not None:
+                capped.append(span.error.detail)
+        for agent in trace.agents:
+            capped += [agent.agent_type, agent.description]
+        assert any(value == payload[:200] or (value and len(value) == 200) for value in capped)
+        for value in capped:
+            assert value is None or len(value) <= 200, (length, value and len(value))
+
     @pytest.mark.parametrize("key", ["name", "id"])
     def test_r2_an_over_long_tool_field_is_truncated_not_fatal(
         self, tmp_path: Path, key: str
@@ -176,10 +206,6 @@ class TestHostileModelAndToolNamesR2:
         for value in (tool.tool_name, tool.tool_use_id):
             assert value is None or len(value) <= 200
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="BUG-1: the same off-by-one on SpanError.detail, fed from apiErrorStatus",
-    )
     def test_r2_an_over_long_api_error_status_is_truncated_not_fatal(self, tmp_path: Path) -> None:
         """R2, R12: the error detail is capped at 200 characters, per the model."""
         trace = load([f.api_error("e1", status="S" * 400)], tmp_path, name="agent-1")

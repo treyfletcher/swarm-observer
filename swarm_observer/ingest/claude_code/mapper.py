@@ -50,7 +50,7 @@ from swarm_observer.ingest.reader import (
     resolve_inputs,
 )
 from swarm_observer.ingest.source import IngestLimits, TraceParseError
-from swarm_observer.ingest.text import canonical_json, preview, slug
+from swarm_observer.ingest.text import canonical_json, preview, preview_within, slug
 from swarm_observer.model.trace import (
     AGENT_ID_PATTERN,
     DETAIL_MAX_CHARS,
@@ -562,7 +562,7 @@ class _TraceBuilder:
             # R12: an API-error record is never billable and carries no usage.
             self.warnings.add("api_error_record")
             code = slug(last.record.error if isinstance(last.record.error, str) else None)
-            detail = preview(
+            detail = preview_within(
                 last.record.apiErrorStatus if isinstance(last.record.apiErrorStatus, str) else None,
                 DETAIL_MAX_CHARS,
             )
@@ -588,9 +588,9 @@ class _TraceBuilder:
             file_index=first.file_index,
             start=start,
             end=end,
-            model=preview(model, DETAIL_MAX_CHARS) or None,
+            model=preview_within(model, DETAIL_MAX_CHARS) or None,
             usage=usage,
-            stop_reason=preview(stop_reason, DETAIL_MAX_CHARS) or None,
+            stop_reason=preview_within(stop_reason, DETAIL_MAX_CHARS) or None,
             text_preview=self._preview(" ".join(texts)),
             error=error,
             extras_dropped=extras,
@@ -620,8 +620,8 @@ class _TraceBuilder:
                     has_parent=True,
                     start=end,
                     end=call_end,
-                    tool_name=preview(block.name, DETAIL_MAX_CHARS) or None,
-                    tool_use_id=preview(block.id, DETAIL_MAX_CHARS) or None,
+                    tool_name=preview_within(block.name, DETAIL_MAX_CHARS) or None,
+                    tool_use_id=preview_within(block.id, DETAIL_MAX_CHARS) or None,
                     tool_input_digest=tool_input_digest(block.input),
                     tool_result_status=status,
                     tool_input_preview=self._preview(canonical_json(block.input)),
@@ -809,7 +809,7 @@ class _TraceBuilder:
         """Sidecar free text, previewed and capped — or dropped under no-previews."""
         if self.no_previews or not isinstance(value, str):
             return None
-        return preview(value, DETAIL_MAX_CHARS) or None
+        return preview_within(value, DETAIL_MAX_CHARS) or None
 
 
 __all__ = [

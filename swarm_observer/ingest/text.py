@@ -38,6 +38,14 @@ def preview(value: str | None, limit: int = PREVIEW_LIMIT) -> str:
     collapsed, so a preview is always one line no matter what the trace holds.
     Truncation counts code points, not bytes, so a multi-byte character is never
     cut in half.
+
+    ``limit`` is a **text budget**, not a length cap: R8 says "truncate to 240
+    characters, appending ``…`` when truncated", so a truncated result is
+    ``limit + 1`` code points long. That is why ``PREVIEW_MAX_CHARS`` is 241
+    against a ``PREVIEW_LIMIT`` of 240. A caller that has a *field cap* to
+    respect — every ``max_length`` on the normalized model — wants
+    :func:`preview_within` instead; passing a field cap here is the off-by-one
+    that BUG-1 was.
     """
     if not value:
         return ""
@@ -46,6 +54,29 @@ def preview(value: str | None, limit: int = PREVIEW_LIMIT) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[:limit] + ELLIPSIS
+
+
+def preview_within(value: str | None, max_chars: int) -> str:
+    """A preview guaranteed to be at most ``max_chars`` code points, ellipsis included.
+
+    The counterpart to :func:`preview` for every field with a ``max_length``.
+    R2 caps several trace-derived fields "at 200 chars"; R8 defines truncation
+    with a trailing ``…``. The spec never says whether that character counts
+    against the cap, and the two readings differ by exactly one — which is how
+    a 201-character ``Span.model`` came to raise an unsanitized
+    ``ValidationError`` quoting the trace. The ruling this function encodes: a
+    *field cap* is always a total budget, so the ellipsis is inside it.
+
+    The ellipsis is only *paid for* when truncation actually happens: a source
+    that fits the cap exactly is carried verbatim, so raising a cap by one never
+    silently shortens a value that already fitted.
+    """
+    if max_chars <= 0:
+        return ""
+    within = preview(value, max_chars)
+    if len(within) <= max_chars:
+        return within
+    return preview(value, max_chars - 1)
 
 
 def canonical_json(value: Any) -> str:
@@ -76,4 +107,12 @@ def slug(value: str | None, limit: int = SLUG_LIMIT, *, fallback: str = "unknown
     return trimmed or fallback
 
 
-__all__ = ["ELLIPSIS", "PREVIEW_LIMIT", "SLUG_LIMIT", "canonical_json", "preview", "slug"]
+__all__ = [
+    "ELLIPSIS",
+    "PREVIEW_LIMIT",
+    "SLUG_LIMIT",
+    "canonical_json",
+    "preview",
+    "preview_within",
+    "slug",
+]

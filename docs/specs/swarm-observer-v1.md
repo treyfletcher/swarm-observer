@@ -1,6 +1,6 @@
 # Spec: swarm-observer v1
 
-Status: DRAFT
+Status: APPROVED — owner ratified 2026-09-09; A5 (hand-authored fixture corpus) accepted, real transcripts to be run as a manual parser check before v1 ships
 Branch strategy: one branch + PR per increment (feature/so-i1 … feature/so-i5), each targeting main
 
 ## Summary

@@ -434,6 +434,27 @@ class TestSpanKindMappingR12:
         trace = load(records, tmp_path)
         assert counts(trace)["dangling_tool_use"] == 1
 
+    def test_r12_a_resolved_final_tool_use_is_not_dangling(self, tmp_path: Path) -> None:
+        """R12, R10: the carve-out is "no result", not "the last span is a tool call".
+
+        Review pin. Dropping the ``tool_result_status == "missing"`` half of the
+        condition left the suite green: every existing case had a final tool call
+        that was also unresolved, so a guard that fired on *any* trailing tool
+        call could not be told apart from the right one.
+        """
+        records = [
+            f.assistant("a1", content=[f.tool_use_block("t1", "Bash", {})], usage_block=f.usage()),
+            f.user(
+                "u1",
+                timestamp="2026-09-09T10:00:05.000Z",
+                content=[f.tool_result_block("t1", "done")],
+            ),
+        ]
+        trace = load(records, tmp_path)
+        last = trace.spans[-1]
+        assert last.kind == "tool_call" and last.tool_result_status == "ok"
+        assert "dangling_tool_use" not in codes(trace)
+
     def test_r12_a_mid_trace_unmatched_tool_use_is_not_dangling(self, tmp_path: Path) -> None:
         """R12: only the agent's highest-``seq`` span qualifies."""
         records = [

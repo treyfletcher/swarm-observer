@@ -176,6 +176,52 @@ class TestFailClosedInputClassesR11:
         assert error.code == "file_too_large"
         assert error.limit == 32
 
+    def test_r11_the_byte_caps_are_exact_at_their_boundary(self, tmp_path: Path) -> None:
+        """R11: ``max_line_bytes`` and ``max_file_bytes`` reject at ``limit + 1``, not before.
+
+        Review pin. Loosening either comparison by one byte left the whole suite
+        green: every existing cap test sets the limit far below the payload, so
+        it proves the cap fires *somewhere* and says nothing about *where*. A cap
+        that is a byte off is how a hostile 40 GB line gets through, and how a
+        legitimate transcript gets rejected.
+        """
+        path = tmp_path / "agent-1.jsonl"
+        line = json.dumps(one_good_record())
+        path.write_text(line + "\n", encoding="utf-8")
+        line_bytes = len(line.encode("utf-8"))
+        file_bytes = path.stat().st_size
+
+        assert load([path], IngestLimits(max_line_bytes=line_bytes)).spans, "exactly at the cap"
+        with pytest.raises(TraceLimitError) as raised:
+            load([path], IngestLimits(max_line_bytes=line_bytes - 1))
+        assert raised.value.code == "line_too_long"
+
+        assert load([path], IngestLimits(max_file_bytes=file_bytes)).spans, "exactly at the cap"
+        with pytest.raises(TraceLimitError) as raised:
+            load([path], IngestLimits(max_file_bytes=file_bytes - 1))
+        assert raised.value.code == "file_too_large"
+
+    def test_r11_the_line_cap_is_exact_when_the_file_is_read_in_chunks(
+        self, tmp_path: Path
+    ) -> None:
+        """R11: the streaming buffer check has the same boundary as the per-line one.
+
+        The cap is enforced twice — once on a completed line and once on the
+        buffer between chunks — and only the second bounds memory on a file with
+        no newline in it at all. Both must agree, or a payload sized between them
+        behaves differently depending on where a chunk happens to end.
+        """
+        path = tmp_path / "agent-1.jsonl"
+        payload = "x" * 4_096
+        path.write_text(payload, encoding="utf-8")  # no trailing newline at all
+        with pytest.raises(TraceLimitError) as raised:
+            load([path], IngestLimits(max_line_bytes=len(payload) - 1))
+        assert raised.value.code == "line_too_long"
+        # At the cap the line is read, and then fails as JSON rather than as a limit.
+        with pytest.raises(TraceParseError) as parse_error:
+            load([path], IngestLimits(max_line_bytes=len(payload)))
+        assert parse_error.value.code == "invalid_json"
+
     def test_r11_record_cap(self, tmp_path: Path) -> None:
         """R11: ``max_records`` bounds the whole input set."""
         path = f.write_trace(tmp_path, [f.assistant("a1"), f.assistant("a2", request_id="r2")])

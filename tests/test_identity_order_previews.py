@@ -223,6 +223,46 @@ class TestCanonicalOrderR6:
         counts = {w.code: w.count for w in trace.warnings}
         assert counts["timestamp_out_of_order"] == 1
 
+    def test_r6_equal_timestamps_are_not_counted_as_out_of_order(self, tmp_path: Path) -> None:
+        """R6: "out of order" means backwards, and two records may share an instant.
+
+        Review pin. Widening the comparison from ``<`` to ``<=`` left the suite
+        green, and real transcripts write several records per millisecond — so
+        the loosened guard would report a warning on almost every file while the
+        one it is meant to report stayed indistinguishable.
+        """
+        records = [
+            f.user("u1", timestamp="2026-09-09T10:00:01.000Z"),
+            f.user("u2", timestamp="2026-09-09T10:00:01.000Z"),
+            f.user("u3", timestamp="2026-09-09T10:00:01.000Z"),
+        ]
+        trace = load([f.write_trace(tmp_path, records)])
+        assert "timestamp_out_of_order" not in {w.code for w in trace.warnings}
+
+    def test_r6_a_backwards_clock_across_a_file_boundary_is_not_counted(
+        self, tmp_path: Path
+    ) -> None:
+        """R6, A6: the counter is per file, because cross-file order is basename order.
+
+        Review pin for spec flag S6: the implementation scopes
+        ``timestamp_out_of_order`` per file (the PR calls this A-a23, a number
+        its own assumption list does not contain), and the reasoning is right —
+        comparing across a file boundary would report R6's own design as a defect
+        on every multi-agent trace. R6's text does not say so, so the behaviour
+        is pinned here until the spec does.
+        """
+        first = f.write_trace(
+            tmp_path, [f.user("u1", timestamp="2026-09-09T10:00:09.000Z")], name="agent-1"
+        )
+        second = f.write_trace(
+            tmp_path, [f.user("u2", timestamp="2026-09-09T10:00:01.000Z")], name="agent-2"
+        )
+        trace = load([first, second])
+        assert [span.start for span in trace.spans] != sorted(
+            span.start for span in trace.spans if span.start is not None
+        ), "file order really is authoritative here"
+        assert "timestamp_out_of_order" not in {w.code for w in trace.warnings}
+
     def test_r6_the_whole_trace_is_stable_under_input_permutation(self, tmp_path: Path) -> None:
         """R6: permuting the command line cannot change one byte of the trace."""
         names = ["agent-1", "agent-2", "agent-3"]

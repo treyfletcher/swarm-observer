@@ -16,15 +16,17 @@ far future, and a trace whose every record is a duplicate of one another.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from swarm_observer.ingest.claude_code.mapper import ClaudeCodeSource
+from swarm_observer.ingest.claude_code.mapper import ClaudeCodeSource, safe_agent_id
 from swarm_observer.ingest.source import IngestLimits, TraceError
 from swarm_observer.model.trace import (
     AGENT_ID_PATTERN,
     PREVIEW_MAX_CHARS,
+    AgentRun,
     Trace,
 )
 
@@ -120,14 +122,50 @@ class TestHostileStringsThroughPreviewsR8:
     @pytest.mark.parametrize("payload", PAYLOADS, ids=lambda p: repr(p[:24]))
     def test_r5_a_hostile_agent_id_never_reaches_an_id(self, tmp_path: Path, payload: str) -> None:
         """R5: whatever the ``agentId`` holds, the model's id matches the alphabet."""
-        import re
-
         record = f.assistant("a1", agent_id=payload, usage_block=f.usage())
         trace = load([record], tmp_path, name="agent-1")
         for span in trace.spans:
-            assert re.match(AGENT_ID_PATTERN, span.agent_id)
+            assert re.fullmatch(AGENT_ID_PATTERN, span.agent_id)
         for agent in trace.agents:
-            assert re.match(AGENT_ID_PATTERN, agent.agent_id)
+            assert re.fullmatch(AGENT_ID_PATTERN, agent.agent_id)
+
+    @pytest.mark.parametrize(
+        "payload",
+        ["a1\n", "a1\n\n", "\na1", "a" * 64 + "\n", "a1\r", "a1\u2028", "a1\x85"],
+        ids=lambda p: repr(p),
+    )
+    def test_r5_a_line_terminator_in_an_agent_id_is_replaced_not_carried(
+        self, tmp_path: Path, payload: str
+    ) -> None:
+        """R5: the mapper's guard must be at least as strict as the model's.
+
+        Review finding. ``safe_agent_id`` matched ``AGENT_ID_PATTERN`` with
+        ``re.match``, and Python's ``$`` also matches immediately before a
+        trailing newline; the engine pydantic uses does not. So ``"a1\\n"``
+        passed the mapper's guard verbatim and was rejected by ``Span``, raising
+        an unsanitized ``ValidationError`` that quoted the trace — and if the two
+        engines had agreed the other way, a newline-bearing id would have gone
+        into an HTML attribute value, which is what R5 exists to prevent.
+        """
+        record = f.assistant("a1", agent_id=payload, usage_block=f.usage())
+        trace = load([record], tmp_path, name="agent-1")
+        (agent,) = trace.agents
+        assert agent.agent_id.startswith("agent_"), agent.agent_id
+        assert not any(char.isspace() for char in agent.agent_id)
+        assert re.fullmatch(AGENT_ID_PATTERN, agent.agent_id)
+
+    def test_r5_every_safe_agent_id_is_accepted_by_the_model(self) -> None:
+        """R5: the property behind the previous test, without going through a file.
+
+        ``safe_agent_id`` is the only producer of ``Span.agent_id``. If it can
+        emit a value the model rejects, ingestion has an unsanitized crash path
+        by construction, whatever the payload happens to be.
+        """
+        payloads = [*PAYLOADS, "a1\n", "", "root", "a" * 200, "ok.id:1-2", "\u2028", "🙂"]
+        for payload in payloads:
+            identifier = safe_agent_id(payload)
+            assert re.fullmatch(AGENT_ID_PATTERN, identifier), (payload, identifier)
+            AgentRun(agent_id=identifier, agent_index=0)
 
 
 class TestHostileModelAndToolNamesR2:

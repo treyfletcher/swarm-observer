@@ -104,7 +104,10 @@ class TraceError(Exception):
             raise ValueError(f"{type(self).__name__} does not own the code {code!r}")
         if source is not None and ("/" in source or "\\" in source):
             raise ValueError("TraceError source must be a basename, never a path")
-        if note is not None and not _NOTE_PATTERN.match(note):
+        # fullmatch, not match: Python's `$` also matches before a trailing
+        # newline, so `match` would admit a note ending in one. Same defect
+        # class as `safe_agent_id`'s.
+        if note is not None and not _NOTE_PATTERN.fullmatch(note):
             raise ValueError("TraceError note must be enumerated text, never trace content")
         self.code = code
         self.source = source

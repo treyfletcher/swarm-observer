@@ -89,10 +89,20 @@ def safe_agent_id(recorded: str | None) -> str:
     by a deterministic digest id, which preserves the one property that matters
     (two records from the same agent map to the same id) without carrying a
     byte the attacker chose.
+
+    ``fullmatch``, not ``match``: Python's ``$`` also matches immediately before
+    a trailing newline, while the engine pydantic compiles ``AGENT_ID_PATTERN``
+    with treats ``$`` as end-of-input. Under ``match`` an ``agentId`` of
+    ``"a1\\n"`` therefore passed this guard verbatim and was then rejected by
+    ``Span.agent_id``, raising an unsanitized ``ValidationError`` that quoted
+    the trace — and had pydantic agreed instead, a newline-bearing id would have
+    reached an HTML attribute value, which is the thing R5 exists to prevent.
+    Two regex engines disagreeing about one metacharacter is not a detail to
+    leave to the reader.
     """
     if not recorded:
         return "root"
-    if _AGENT_ID_OK.match(recorded):
+    if _AGENT_ID_OK.fullmatch(recorded):
         return recorded
     return "agent_" + hashlib.sha256(recorded.encode("utf-8")).hexdigest()[:12]
 

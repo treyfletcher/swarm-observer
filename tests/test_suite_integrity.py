@@ -150,13 +150,30 @@ class TestCanaryLedgerR50:
         assert outstanding, "the canary ledger is empty; R50 lists seven required canaries"
         assert all(increment <= 5 for increment in outstanding.values())
 
-    def test_r50_canary_modules_are_all_ledgered(self) -> None:
-        """R50: a canary that exists but is not required is a naming mistake."""
-        present = {
-            path.stem.removeprefix("test_canary_")
-            for path in (TESTS_DIR / "canaries").glob("test_canary_*.py")
-        }
-        assert present <= set(REQUIRED_CANARIES), f"unledgered canaries: {sorted(present)}"
+    def test_r50_every_canary_module_proves_a_failure(self) -> None:
+        """R50: a canary must assert its guard *raises*, whether or not it is required.
+
+        This assertion used to be ``present <= REQUIRED_CANARIES`` — a closed
+        name list, which is stricter than R50 (R50 requires certain canaries to
+        exist; it does not forbid others) and which locked the directory against
+        the one role most likely to need a new guard proof. The tester hit
+        exactly that and had to put its independent guard verification in a
+        normal module instead.
+
+        What the closed list was really protecting is the property below: a
+        "canary" that never asserts a failure is a canary in name only, and is
+        the thing R50 exists to prevent. That is now checked directly, so an
+        extra canary is welcome and an inert one is not.
+        """
+        canaries = sorted((TESTS_DIR / "canaries").glob("test_canary_*.py"))
+        assert canaries, "the canary directory is empty"
+        for path in canaries:
+            source = path.read_text(encoding="utf-8")
+            assert "pytest.raises" in source, (
+                f"{path.relative_to(REPO)} asserts no failure; a canary that cannot "
+                "observe its guard failing is a canary in name only (R50)"
+            )
+            assert "R50" in source, f"{path.relative_to(REPO)} does not cite R50"
 
 
 def test_r49_collection_floor_json_has_a_stable_shape() -> None:

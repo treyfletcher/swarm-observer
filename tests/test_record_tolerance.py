@@ -271,15 +271,6 @@ class TestFatalHalfIsCheckedBeforePydanticR4:
         assert raised.value.code == "bad_message"
         assert "hostile" not in raised.value.cli_line
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=Exception,
-        reason=(
-            "BUG-4: RawRecord.message has no before-validator, so a system or attachment "
-            "record with a scalar message raises an unsanitized ValidationError quoting the "
-            "value; R4 makes that fatal only for assistant/user records"
-        ),
-    )
     def test_r4_a_scalar_message_on_another_record_type_is_tolerated(self, tmp_path: Path) -> None:
         """R4: the rule is written for ``assistant``/``user``; a system record is not one."""
         record = {
@@ -291,6 +282,71 @@ class TestFatalHalfIsCheckedBeforePydanticR4:
         }
         trace = load(f.write_trace(tmp_path, [record]))
         assert [span.kind for span in trace.spans] == ["system_event"]
+
+    @pytest.mark.parametrize("value", ["NESTED-PAYLOAD", 0, True, [1], 1.5])
+    def test_r4_a_wrong_typed_nested_object_is_absence_not_a_crash(
+        self, tmp_path: Path, value: object
+    ) -> None:
+        """R4, R11: ``message``/``usage``/``cache_creation`` tolerate a wrong type.
+
+        Review fix for BUG-4. The three nested-model fields had no
+        before-validator, so a hostile value reached pydantic and the escaping
+        ``ValidationError`` quoted the trace. Each position below is on the
+        tolerated side of R4's split, so the only admissible outcome is that the
+        value is dropped and the run continues.
+        """
+        cases: list[tuple[str, dict[str, Any]]] = [
+            (
+                "system.message",
+                {"type": "system", "uuid": "s1", "timestamp": f.BASE_TIME, "message": value},
+            ),
+            (
+                "attachment.message",
+                {"type": "attachment", "uuid": "t1", "timestamp": f.BASE_TIME, "message": value},
+            ),
+            (
+                "message.usage",
+                {
+                    "type": "assistant",
+                    "uuid": "a1",
+                    "timestamp": f.BASE_TIME,
+                    "requestId": "r1",
+                    "message": {"id": "m1", "model": "m", "content": [], "usage": value},
+                },
+            ),
+            (
+                "usage.cache_creation",
+                {
+                    "type": "assistant",
+                    "uuid": "a2",
+                    "timestamp": f.BASE_TIME,
+                    "requestId": "r2",
+                    "message": {
+                        "id": "m2",
+                        "model": "m",
+                        "content": [],
+                        "usage": {"input_tokens": 5, "cache_creation": value},
+                    },
+                },
+            ),
+        ]
+        for index, (label, record) in enumerate(cases):
+            trace = load(f.write_trace(tmp_path, [record], name=f"agent-{index}"))
+            assert trace.spans or label.startswith("attachment"), label
+            if isinstance(value, str):
+                assert value not in trace.model_dump_json(), label
+
+    def test_r4_a_scalar_message_is_still_fatal_for_a_user_record(self, tmp_path: Path) -> None:
+        """R4: the fatal half names ``assistant``/``user``, and ``user`` is not dropped.
+
+        Review pin: the ``user`` arm of R4's ``bad_message`` rule had no test, so
+        deleting it from :func:`parse_record` left the suite green.
+        """
+        record = {"type": "user", "uuid": "u1", "timestamp": f.BASE_TIME, "message": "hostile"}
+        with pytest.raises(TraceParseError) as raised:
+            load(f.write_trace(tmp_path, [record]))
+        assert raised.value.code == "bad_message"
+        assert "hostile" not in raised.value.cli_line
 
     def test_r4_a_duplicate_uuid_is_fatal_within_a_file_only(self, tmp_path: Path) -> None:
         """R4: "duplicate ``uuid`` within one file" — across files is legal."""
@@ -378,13 +434,6 @@ KNOWN_TOLERANCE_DEFECTS: frozenset[tuple[str, str]] = frozenset(
         ("message.stop_reason", "ValidationError"),
         ("block.id", "ValidationError"),
         ("block.name", "ValidationError"),
-        # BUG-4: nested raw models have no before-validator.
-        ("message.usage", "ValidationError"),
-        ("usage[assistant]", "ValidationError"),
-        ("usage[attachment]", "ValidationError"),
-        ("usage[system]", "ValidationError"),
-        ("usage[unknown_kind]", "ValidationError"),
-        ("usage[user]", "ValidationError"),
     }
 )
 

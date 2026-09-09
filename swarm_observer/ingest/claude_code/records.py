@@ -86,6 +86,21 @@ def _non_negative_int(value: Any) -> Any:
     return max(0, value)
 
 
+def _optional_object(value: Any) -> Any:
+    """Keep JSON objects, drop anything else. A wrong-typed nested value is absence.
+
+    The scalar fields have had this treatment since T4 (``_optional_string``,
+    ``_non_negative_int``); the *nested model* fields did not, so a ``message``
+    of ``"a string"`` on a ``system`` record, or a ``usage`` of ``true``, reached
+    pydantic and raised a ``ValidationError`` whose message quotes the offending
+    trace bytes. R4 makes a non-object ``message`` fatal for ``assistant`` and
+    ``user`` records only, and :func:`parse_record` still enforces that *before*
+    pydantic runs; every other position is tolerated, which per R4 means it may
+    not raise at all.
+    """
+    return value if value is None or isinstance(value, dict | BaseModel) else None
+
+
 OptionalString = Annotated[str | None, BeforeValidator(_optional_string)]
 UsageInt = Annotated[int, BeforeValidator(_non_negative_int)]
 
@@ -120,7 +135,7 @@ class RawUsage(RawBase):
     output_tokens: UsageInt = 0
     cache_read_input_tokens: UsageInt = 0
     cache_creation_input_tokens: UsageInt = 0
-    cache_creation: RawCacheCreation | None = None
+    cache_creation: Annotated[RawCacheCreation | None, BeforeValidator(_optional_object)] = None
 
 
 class RawBlock(RawBase):
@@ -149,7 +164,7 @@ class RawMessage(RawBase):
     model: OptionalString = None
     role: OptionalString = None
     content: Any = None
-    usage: RawUsage | None = None
+    usage: Annotated[RawUsage | None, BeforeValidator(_optional_object)] = None
     stop_reason: OptionalString = None
 
 
@@ -177,7 +192,7 @@ class RawRecord(RawBase):
     isApiErrorMessage: Any = None
     apiErrorStatus: Any = None
     error: Any = None
-    message: RawMessage | None = None
+    message: Annotated[RawMessage | None, BeforeValidator(_optional_object)] = None
 
     @property
     def is_api_error(self) -> bool:

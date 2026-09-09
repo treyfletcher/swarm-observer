@@ -1,0 +1,50 @@
+# CI (T1): ruff, ruff format --check, strict mypy, and the offline pytest job
+# on the 3.11/3.12 matrix.
+#
+# R45: the suite must pass with no network, with every provider credential
+# unset (the spend-sentinel `env -u` pattern), and with `anthropic` NOT
+# installed — so the install step deliberately installs only `.[dev]` and never
+# the `[explain]` extra. The `live_narrator` marker (R41/R43) is always
+# deselected here; R49's terminal-summary hook fails the session if that
+# deselection ever turns into a silent skip.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (no [explain] extra — R45 requires `anthropic` absent)
+        run: python -m pip install -e ".[dev]"
+      - name: Lint (ruff)
+        run: python -m ruff check .
+      - name: Format check (ruff)
+        run: python -m ruff format --check .
+      - name: Type-check (mypy --strict)
+        run: python -m mypy
+      - name: Assert `anthropic` is not importable (R45)
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          if importlib.util.find_spec("anthropic") is not None:
+              sys.exit("anthropic must not be installed in the offline CI job (R45)")
+          PY
+      - name: Tests (no credentials, no network, live_narrator deselected — R45)
+        run: |
+          env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL \
+              -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+              -u AWS_PROFILE -u OPENAI_API_KEY -u GH_TOKEN \
+              python -m pytest -m "not live_narrator" \
+              --cov=swarm_observer --cov-report=term-missing

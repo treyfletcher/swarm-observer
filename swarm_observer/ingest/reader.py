@@ -38,7 +38,7 @@ from swarm_observer.ingest.source import (
     TraceParseError,
     TraceReadError,
 )
-from swarm_observer.model.trace import SourceFile
+from swarm_observer.model.trace import DETAIL_MAX_CHARS, SourceFile
 
 #: Read granularity. Independent of the caps: it only bounds a single `read`.
 _CHUNK_BYTES = 1 << 20
@@ -88,6 +88,14 @@ def resolve_inputs(paths: Sequence[Path], limits: IngestLimits) -> tuple[Path, .
     seen: dict[str, Path] = {}
     for path in paths:
         name = path.name
+        if len(name) > DETAIL_MAX_CHARS:
+            # `SourceFile.name` is capped at 200 (R2), and a filesystem happily
+            # allows 255. Without this check the cap was enforced by pydantic
+            # several layers later, as an unsanitized ValidationError quoting the
+            # path — the same class of escape as the trace-derived caps, and just
+            # as much an R11 violation. `source` is deliberately omitted: the
+            # over-long name is the thing being rejected.
+            raise TraceReadError("name_too_long", limit=DETAIL_MAX_CHARS)
         if not path.exists():
             raise TraceReadError("unreadable_path", source=name)
         if path.is_symlink() and os.path.realpath(path) not in named:

@@ -299,6 +299,30 @@ class TestFailClosedInputClassesR11:
             load([first, second])
         assert raised.value.code == "duplicate_input"
 
+    @pytest.mark.parametrize("length", [201, 250])
+    def test_r11_an_over_long_basename_fails_closed(self, tmp_path: Path, length: int) -> None:
+        """R11, R2: a basename longer than ``SourceFile.name`` allows is fatal, not a crash.
+
+        Review finding. ``SourceFile.name`` is capped at 200 characters (R2) and
+        a filesystem allows 255, so the cap was enforced by pydantic several
+        layers into ``load()`` as an unsanitized ``ValidationError`` quoting the
+        path. R11 admits exactly one outcome here: a sanitized ``TraceError``.
+        """
+        name = "a" * (length - len(".jsonl")) + ".jsonl"
+        path = tmp_path / name
+        path.write_text("", encoding="utf-8")
+        with pytest.raises(TraceReadError) as raised:
+            load([path])
+        assert raised.value.code == "name_too_long"
+        assert name not in raised.value.cli_line, "the rejected name must not be echoed back"
+
+    def test_r11_a_basename_at_the_cap_is_accepted(self, tmp_path: Path) -> None:
+        """R11: the guard rejects only what the model would reject, one byte over."""
+        name = "a" * (200 - len(".jsonl")) + ".jsonl"
+        path = f.write_trace(tmp_path, [f.assistant("a1", usage_block=f.usage())], name=name[:-6])
+        assert len(path.name) == 200
+        assert load([path]).source_files[0].name == path.name
+
     def test_r11_no_input_paths_at_all(self) -> None:
         """R11: an empty input set is fatal, not an empty trace."""
         with pytest.raises(TraceReadError) as raised:

@@ -145,6 +145,7 @@ class TraceReadError(TraceError):
             "not_a_regular_file",
             "symlink_escape",
             "duplicate_input",
+            "name_too_long",
         }
     )
 

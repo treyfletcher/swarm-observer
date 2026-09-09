@@ -3,16 +3,16 @@
   "modules": {
     "tests/canaries/test_canary_determinism_harness.py": 3,
     "tests/canaries/test_canary_golden_byte_flip.py": 7,
-    "tests/test_adversarial_inputs.py": 122,
+    "tests/test_adversarial_inputs.py": 142,
     "tests/test_boundaries_and_posture.py": 26,
-    "tests/test_collapse_r9.py": 28,
+    "tests/test_collapse_r9.py": 33,
     "tests/test_guard_verification.py": 39,
-    "tests/test_identity_order_previews.py": 52,
+    "tests/test_identity_order_previews.py": 61,
     "tests/test_model_schema.py": 89,
-    "tests/test_reader_and_limits.py": 65,
-    "tests/test_record_tolerance.py": 41,
+    "tests/test_reader_and_limits.py": 76,
+    "tests/test_record_tolerance.py": 47,
     "tests/test_suite_integrity.py": 15,
     "tests/test_traceability.py": 6,
-    "tests/test_warnings_and_spans.py": 57
+    "tests/test_warnings_and_spans.py": 58
   }
 }

@@ -305,24 +305,22 @@ class TestFailClosedInputClassesR11:
             load([])
         assert raised.value.code == "empty_input"
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=RecursionError,
-        reason=(
-            "BUG-3: json.loads raises RecursionError on a deeply nested line; it escapes "
-            "ClaudeCodeSource.load un-sanitized, so the CLI prints a traceback instead of "
-            "R11's one line and exits 1 instead of 2"
-        ),
-    )
-    def test_r11_a_deeply_nested_json_line_must_fail_closed(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("depth", [2_000, 5_000, 50_000])
+    @pytest.mark.parametrize("opener", ["[", '{"k":'])
+    def test_r11_a_deeply_nested_json_line_must_fail_closed(
+        self, tmp_path: Path, depth: int, opener: str
+    ) -> None:
         """R11: a nested-array bomb is a fatal condition, not an interpreter crash.
 
         The payload is a few kilobytes — far under ``max_line_bytes`` — so no cap
         catches it. R11 admits exactly one outcome for input the reader cannot
-        parse: a sanitized ``TraceError``.
+        parse: a sanitized ``TraceError``. Review fix for BUG-3; parameterized
+        over both nesting shapes and three depths so the fix cannot be a
+        threshold that only covers the reported payload.
         """
+        closer = "]" if opener == "[" else "}"
         path = tmp_path / "agent-1.jsonl"
-        payload = "[" * 5_000 + "]" * 5_000
+        payload = opener * depth + closer * depth
         path.write_text(
             '{"type":"user","uuid":"u","timestamp":"2026-09-09T10:00:00.000Z","deep":'
             + payload
@@ -330,8 +328,22 @@ class TestFailClosedInputClassesR11:
             encoding="utf-8",
         )
         assert path.stat().st_size < DEFAULTS.max_line_bytes
-        with pytest.raises(TraceError):
+        with pytest.raises(TraceError) as raised:
             load([path])
+        assert raised.value.code == "invalid_json"
+        assert raised.value.cli_line.count("\n") == 0
+        assert opener not in raised.value.detail
+
+    def test_r11_a_legally_nested_json_line_still_parses(self, tmp_path: Path) -> None:
+        """R11: the depth guard rejects only what the decoder cannot handle."""
+        path = tmp_path / "agent-1.jsonl"
+        payload = "[" * 50 + "]" * 50
+        path.write_text(
+            '{"type":"user","uuid":"u","timestamp":"2026-09-09T10:00:00.000Z",'
+            '"message":{"content":"hi"},"deep":' + payload + "}\n",
+            encoding="utf-8",
+        )
+        assert load([path]).spans[0].kind == "user_message"
 
 
 class TestToleratedInputClassesR11:

@@ -191,7 +191,15 @@ def read_jsonl(
                 ) from None
             try:
                 payload = json.loads(text)
-            except ValueError:
+            except (ValueError, RecursionError):
+                # RecursionError, not just ValueError: a few kilobytes of nested
+                # brackets is far under `max_line_bytes`, so no byte cap catches
+                # a nesting bomb, and `json.loads` blows the interpreter stack
+                # rather than reporting a syntax error. R11 admits exactly one
+                # outcome for a line the reader cannot decode — a sanitized
+                # TraceError — and "the parser could not decode this line" is
+                # what `invalid_json` means. The durable fix is a depth cap in
+                # IngestLimits, which is a spec amendment (see review S4).
                 raise TraceParseError("invalid_json", source=name, line=line_number) from None
             if not isinstance(payload, dict):
                 raise TraceParseError("not_an_object", source=name, line=line_number)

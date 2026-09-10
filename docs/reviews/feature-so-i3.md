@@ -236,11 +236,12 @@ eleven. The coder's own S16 suggests a 16-hex digest and I agree; A10's "only
 digests, counts and enumerated slugs" already licenses it. Not fixed here
 because it is a new field in a pinned taxonomy, which is the PM's.
 
-**C2 — `CostReport.cost_of` is O(n) inside nothing.** It scans `spans` linearly
-and has no caller in the product. Either it acquires one in increment 4's HTML
-(where it will be called per row, over up to 5,000 rows) or it should go.
-Flagging now because the shape — a helper written for a caller that does not
-exist yet — is how `format_display_usd` ended up untested by anything real.
+**C2 — `CostReport.cost_of` is O(n) and has no caller in the product.** It scans
+`spans` linearly. Either it acquires a caller in increment 4's HTML — where it
+would run per row, over up to 5,000 rows, making it O(n²) — or it should go.
+Flagging now because the shape is the same one `format_display_usd` has: a
+helper written for a caller that does not exist yet, tested as a function and by
+nothing that uses it. Two of them is a pattern worth naming before a third.
 
 **C3 — `_by_agent` and `_by_model` are O(agents × spans).** Each row re-scans
 the whole priced list. Increment 2's review found two real quadratic blowups by
@@ -255,10 +256,14 @@ correct today; `detect/base.spans_by_agent` already carries a paragraph about
 exactly this assumption and defends against it, and `cost/` does not. Worth one
 helper rather than four call sites, in increment 4.
 
-**C5 — `severity_counts` is called twice per run** (once by `summary_line`, once
-by `report_document`). Harmless; noted only because R40 pins stdout as a
-function of the findings and a future divergence between the two call sites
-would be invisible. A test pins that they agree.
+**C5 — `severity_counts` is called twice per run**, once by `summary_line` and
+once by `report_document`, and nothing compared the two. Harmless today, but R40
+pins stdout as a function of the findings and a future change to one call site
+would put two different tallies in front of a reader with nothing noticing. The
+one comment here I did close in code, because it is four lines:
+`test_r40_stdout_and_the_document_report_the_same_counts` parses the stdout line
+and compares it to `meta.counts.findings_by_severity` from the same run, with
+the non-vacuous arm that at least one severity is non-zero.
 
 **C6 — the deferred-flag refusals are right, and the loop that renders them is
 `sorted(_DEFERRED_FLAGS.items())`.** That makes `--explain --out` report
@@ -768,14 +773,14 @@ measurement.
 
 | | CPython 3.11.15 | CPython 3.12.3 |
 | --- | --- | --- |
-| Full suite | **2093 passed, 1 xfailed** | **2093 passed, 1 xfailed** |
+| Full suite | **2094 passed, 1 xfailed** | **2094 passed, 1 xfailed** |
 | `ruff check` | clean | clean |
 | `ruff format --check` | 65 files formatted | 65 files formatted |
 | `mypy --strict` | no issues in 30 source files | no issues in 30 source files |
 | `tests/allowed_skips.txt` | empty | empty |
 | Collection floors | at current counts | at current counts |
 
-Baselines: 1,337 before increment 3; 2,035 handed to me; **2,093** now.
+Baselines: 1,337 before increment 3; 2,035 handed to me; **2,094** now.
 
 **The one remaining xfail is deliberate and is not a bug I declined to fix.** It
 is the display half of BUG-2 — whether `--no-previews` should *blank* a

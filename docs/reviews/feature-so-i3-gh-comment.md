@@ -1,6 +1,6 @@
 ## Review: increment 3 — **Merge**, with one thing only Trey can check
 
-All 7 reported bugs are real and **fixed here** as `review:` commits, each with its pinning test. **2086 passed, 1 xfailed** on 3.11 and 3.12; lint and types clean. Detail in `docs/reviews/feature-so-i3.md`.
+All 7 reported bugs are real and **fixed here** as `review:` commits, each with its pinning test. **2094 passed, 1 xfailed** on 3.11 and 3.12; lint and types clean. Detail in `docs/reviews/feature-so-i3.md`.
 
 ### 🔴 One rate cell, first
 

@@ -1497,6 +1497,29 @@ class TestSummaryLineSanitationR40:
         assert target.is_file()
         assert "\x1b" not in out
 
+    def test_r40_stdout_and_the_document_report_the_same_counts(self, tmp_path: Path) -> None:
+        """R40/R36: the two callers of ``severity_counts`` must agree.
+
+        Added by review (comment C5). ``summary_line`` and ``report_document``
+        each call ``severity_counts`` independently, so a future change to one
+        call site — a different findings sequence, a filter applied on one path
+        — would put two different tallies in front of a reader with nothing
+        comparing them. R40 pins stdout as a function of the findings; this is
+        the assertion that it is a function of the *same* findings the document
+        describes.
+        """
+        report = tmp_path / "r.json"
+        source = FIXTURE_DIR / "duplicate_tool_call.jsonl"
+        _, out, _ = invoke("analyze", str(source), "--json", str(report))
+        document = json.loads(report.read_text())["meta"]["counts"]["findings_by_severity"]
+        tallies = out.strip().split("findings: ", 1)[1]
+        assert tallies == " ".join(
+            f"{name}={document[name]}" for name in ("critical", "warning", "info")
+        )
+        # Non-vacuous: at least one severity is non-zero, so the comparison is
+        # not two rows of zeros agreeing with each other.
+        assert sum(document.values()) > 0
+
     def test_r40_an_ordinary_path_produces_exactly_one_clean_line(self, tmp_path: Path) -> None:
         """R40: the non-vacuous arm — the ordinary case is already correct, so
         the failures above are about the hostile path and not about the line."""

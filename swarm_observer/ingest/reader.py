@@ -155,6 +155,54 @@ def _iter_lines(
         yield line_number, bytes(buffer)
 
 
+def exceeds_json_depth(text: str, max_depth: int) -> bool:
+    """R11: does ``text`` nest JSON containers deeper than ``max_depth``?
+
+    This is a *bound*, not a parser. It does not validate the line — malformed
+    input still goes to :func:`json.loads` and still fails as ``invalid_json``.
+    All it does is refuse to hand the decoder something deep enough to be a
+    problem, before the decoder sees it.
+
+    It exists because the alternative is not a contract. Letting ``json.loads``
+    exhaust the C stack and catching the ``RecursionError`` looks like a guard
+    and behaves like one on whichever interpreter you happened to run: CPython
+    3.11 raises at depth 1,000, CPython 3.12 parses 5,000 without complaint and
+    only gives up somewhere past 20,000, and where exactly depends on the build,
+    the platform and how much stack the calling frame already used. A
+    fail-closed guarantee that holds on one interpreter and silently does not on
+    another is worse than none, because the test passes.
+
+    The scan is character-wise and string-aware — a ``[`` inside a JSON string
+    literal is a character, not a container — with a ``str.count`` pre-check so
+    the loop runs only for a line that could plausibly breach the cap. Depth is
+    clamped at zero so a run of leading closers cannot buy extra levels.
+    """
+    if text.count("[") + text.count("{") <= max_depth:
+        return False  # cannot reach max_depth + 1 even if every opener nests
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > max_depth:
+                return True
+        elif char in "]}" and depth > 0:
+            depth -= 1
+    return False
+
+
 def read_jsonl(
     path: Path,
     file_index: int,
@@ -197,17 +245,19 @@ def read_jsonl(
                 raise TraceParseError(
                     "invalid_encoding", source=name, line=line_number, note="not valid UTF-8"
                 ) from None
+            if exceeds_json_depth(text, limits.max_json_depth):
+                raise TraceLimitError(
+                    "json_too_deep", source=name, line=line_number, limit=limits.max_json_depth
+                )
             try:
                 payload = json.loads(text)
             except (ValueError, RecursionError):
-                # RecursionError, not just ValueError: a few kilobytes of nested
-                # brackets is far under `max_line_bytes`, so no byte cap catches
-                # a nesting bomb, and `json.loads` blows the interpreter stack
-                # rather than reporting a syntax error. R11 admits exactly one
-                # outcome for a line the reader cannot decode — a sanitized
-                # TraceError — and "the parser could not decode this line" is
-                # what `invalid_json` means. The durable fix is a depth cap in
-                # IngestLimits, which is a spec amendment (see review S4).
+                # The depth cap above is what actually stops a nesting bomb, and
+                # it does so identically on every interpreter. RecursionError is
+                # still caught because `max_json_depth` is a knob: raise it past
+                # what this interpreter's stack can take and `json.loads` starts
+                # blowing up again, which R11 still requires to be one sanitized
+                # line rather than a traceback.
                 raise TraceParseError("invalid_json", source=name, line=line_number) from None
             if not isinstance(payload, dict):
                 raise TraceParseError("not_an_object", source=name, line=line_number)
@@ -303,6 +353,7 @@ __all__ = [
     "atomic_write_texts",
     "compute_trace_id",
     "digest_id",
+    "exceeds_json_depth",
     "load_input",
     "read_jsonl",
     "resolve_inputs",

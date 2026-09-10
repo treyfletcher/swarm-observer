@@ -24,6 +24,7 @@ import io
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,7 @@ from swarm_observer.ingest.reader import (
     atomic_write_texts,
     compute_trace_id,
     digest_id,
+    exceeds_json_depth,
     load_input,
     read_jsonl,
     resolve_inputs,
@@ -375,37 +377,86 @@ class TestFailClosedInputClassesR11:
             load([])
         assert raised.value.code == "empty_input"
 
-    @pytest.mark.parametrize("depth", [2_000, 5_000, 50_000])
+    def _nested_line(self, path: Path, opener: str, depth: int) -> None:
+        """One valid ``user`` record whose ``deep`` value nests ``depth`` levels."""
+        closer, innermost = ("]", "") if opener == "[" else ("}", "1")
+        path.write_text(
+            '{"type":"user","uuid":"u","timestamp":"2026-09-09T10:00:00.000Z",'
+            '"message":{"content":"hi"},"deep":'
+            + opener * depth
+            + innermost
+            + closer * depth
+            + "}\n",
+            encoding="utf-8",
+        )
+
+    @pytest.mark.parametrize("depth", [201, 1_000, 2_000, 5_000, 50_000])
     @pytest.mark.parametrize("opener", ["[", '{"k":'])
     def test_r11_a_deeply_nested_json_line_must_fail_closed(
         self, tmp_path: Path, depth: int, opener: str
     ) -> None:
-        """R11: a nested-array bomb is a fatal condition, not an interpreter crash.
+        """R11: a nesting bomb is fatal on every interpreter, not just the local one.
 
-        The payload is a few kilobytes — far under ``max_line_bytes`` — so no cap
-        catches it. R11 admits exactly one outcome for input the reader cannot
-        parse: a sanitized ``TraceError``. Review fix for BUG-3; parameterized
-        over both nesting shapes and three depths so the fix cannot be a
-        threshold that only covers the reported payload.
+        The payload is a few kilobytes — far under ``max_line_bytes`` — so no
+        byte cap catches it. The first version of this fix relied on
+        ``json.loads`` raising ``RecursionError``, which is not a contract: it
+        held on CPython 3.11 and silently did not on 3.12, where depths 1,000
+        through 5,000 parse happily. CI's version matrix caught it; a local
+        single-version run could not. ``max_json_depth`` decides now, so the
+        outcome is the same everywhere.
         """
-        closer = "]" if opener == "[" else "}"
         path = tmp_path / "agent-1.jsonl"
-        payload = opener * depth + closer * depth
-        path.write_text(
-            '{"type":"user","uuid":"u","timestamp":"2026-09-09T10:00:00.000Z","deep":'
-            + payload
-            + "}\n",
-            encoding="utf-8",
-        )
+        self._nested_line(path, opener, depth)
         assert path.stat().st_size < DEFAULTS.max_line_bytes
-        with pytest.raises(TraceError) as raised:
+        with pytest.raises(TraceLimitError) as raised:
             load([path])
-        assert raised.value.code == "invalid_json"
+        assert raised.value.code == "json_too_deep"
+        assert raised.value.limit == DEFAULTS.max_json_depth
         assert raised.value.cli_line.count("\n") == 0
         assert opener not in raised.value.detail
 
+    @pytest.mark.parametrize("opener", ["[", '{"k":'])
+    def test_r11_the_json_depth_cap_is_exact_at_its_boundary(
+        self, tmp_path: Path, opener: str
+    ) -> None:
+        """R11: the cap admits exactly ``max_json_depth`` levels and refuses one more."""
+        path = tmp_path / "agent-1.jsonl"
+        limits = IngestLimits(max_json_depth=8)
+        # The record object itself is one level, so `deep` may nest 7 more.
+        self._nested_line(path, opener, 7)
+        assert load([path], limits).spans[0].kind == "user_message"
+        self._nested_line(path, opener, 8)
+        with pytest.raises(TraceLimitError) as raised:
+            load([path], limits)
+        assert raised.value.code == "json_too_deep"
+        assert raised.value.limit == 8
+
+    @pytest.mark.parametrize("recursion_limit", [400, 1_000, 20_000])
+    def test_r11_the_depth_verdict_does_not_depend_on_the_recursion_limit(
+        self, tmp_path: Path, recursion_limit: int
+    ) -> None:
+        """R11: the guard is interpreter-independent, which is the whole point.
+
+        This is the regression pin for the CI failure. ``sys.getrecursionlimit``
+        stands in here for everything that varies between interpreters, builds
+        and platforms: whatever it is set to, a bomb is rejected and a legal
+        record is accepted, with the same code both times.
+        """
+        original = sys.getrecursionlimit()
+        path = tmp_path / "agent-1.jsonl"
+        try:
+            sys.setrecursionlimit(recursion_limit)
+            self._nested_line(path, "[", 5_000)
+            with pytest.raises(TraceLimitError) as raised:
+                load([path])
+            assert raised.value.code == "json_too_deep"
+            self._nested_line(path, "[", 50)
+            assert load([path]).spans[0].kind == "user_message"
+        finally:
+            sys.setrecursionlimit(original)
+
     def test_r11_a_legally_nested_json_line_still_parses(self, tmp_path: Path) -> None:
-        """R11: the depth guard rejects only what the decoder cannot handle."""
+        """R11: the depth guard rejects only what breaches the cap."""
         path = tmp_path / "agent-1.jsonl"
         payload = "[" * 50 + "]" * 50
         path.write_text(
@@ -414,6 +465,26 @@ class TestFailClosedInputClassesR11:
             encoding="utf-8",
         )
         assert load([path]).spans[0].kind == "user_message"
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ('{"a":"[[[[[[[[[["}', False),  # brackets inside a string are characters
+            ('{"a":"\\""}', False),  # an escaped quote does not end the string
+            ('{"a":"\\\\"}', False),  # an escaped backslash does
+            ("]]]]]]]]]][[", False),  # leading closers cannot buy extra depth
+            ("[[[", True),
+            ('{"a":{"b":{"c":1}}}', True),
+        ],
+    )
+    def test_r11_the_depth_scan_is_string_aware(self, text: str, expected: bool) -> None:
+        """R11: the bound counts containers, not bracket characters.
+
+        A cap that counted every ``[`` would reject a record whose tool result
+        happens to quote a nested structure — a false fail-closed on legitimate
+        input, which is as much a defect as missing the bomb.
+        """
+        assert exceeds_json_depth(text, 2) is expected
 
 
 class TestToleratedInputClassesR11:

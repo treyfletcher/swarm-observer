@@ -48,6 +48,16 @@ class IngestLimits(BaseModel):
     max_line_bytes: int = Field(default=8_388_608, ge=1)
     max_records: int = Field(default=2_000_000, ge=1)
     max_files: int = Field(default=64, ge=1)
+    #: The deepest container nesting a line's JSON may reach. R11's four byte
+    #: and count caps do not bound depth, and a nesting bomb is only a few
+    #: kilobytes, so without this the only thing standing between the reader and
+    #: a hostile line is whether ``json.loads`` happens to exhaust the C stack —
+    #: which is interpreter-, build- and platform-dependent and is therefore not
+    #: a contract at all (CPython 3.11 raises at depth 1,000; 3.12 parses 5,000
+    #: happily). 200 is an order of magnitude beyond anything an observed
+    #: transcript contains and well under every supported interpreter's limit.
+    #: Not yet in R11's text — see the review's ruling on spec flag S4.
+    max_json_depth: int = Field(default=200, ge=1)
 
 
 class TraceSource(Protocol):
@@ -153,7 +163,15 @@ class TraceReadError(TraceError):
 class TraceLimitError(TraceError):
     """An :class:`IngestLimits` cap was exceeded (R11)."""
 
-    CODES = frozenset({"file_too_large", "line_too_long", "too_many_files", "too_many_records"})
+    CODES = frozenset(
+        {
+            "file_too_large",
+            "line_too_long",
+            "too_many_files",
+            "too_many_records",
+            "json_too_deep",
+        }
+    )
 
 
 class TraceParseError(TraceError):

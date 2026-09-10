@@ -65,6 +65,7 @@ from swarm_observer.model.trace import TokenUsage
 
 from .synthetic_traces import (
     DIGEST_A,
+    DIGEST_B,
     SYNTHETIC_TRACE_ID,
     TraceBuilder,
     at,
@@ -1113,3 +1114,74 @@ def test_r14_r17_a_finding_carrying_evidence_is_internally_consistent() -> None:
     assert len(found) == 1
     assert found[0].span_seqs == (1, 2)
     assert found[0].wasted == tokens(500)
+
+
+class TestRunIsAlreadySortedR13:
+    """R13 (mutations A01, T01): "findings are returned already sorted", per detector.
+
+    ``TestDetectorProtocolR13`` asserts this over the corpus, but for
+    ``agent_loop`` and ``retry_storm`` no fixture produces two findings whose
+    scan order differs from their sorted order — so replacing ``sort_findings``
+    with ``tuple`` in either module left the whole suite green. Since increment
+    3 the pipeline calls ``scan_with_waste`` rather than ``run``, which makes
+    ``run``'s own contract even easier to break unobserved.
+
+    Each case below is built so the *scan* order is critical-then-warning and
+    the *sorted* order is the reverse, and the scan order is asserted first so
+    the test cannot pass by the two coinciding.
+    """
+
+    def test_r13_agent_loop_run_returns_sorted_findings(self) -> None:
+        """R13: two loops in one agent, the critical one first in scan order."""
+        builder = TraceBuilder()
+
+        def cycle(digest: str) -> None:
+            parent = builder.model_call(usage=tokens(10))
+            builder.tool_call(parent=parent, digest=digest)
+
+        for _ in range(4):
+            cycle(DIGEST_A)
+        cycle("00000000000000cc")
+        for _ in range(3):
+            cycle(DIGEST_B)
+        trace = builder.build()
+        detector = detector_by_slug("agent_loop")
+        scanned = [finding for finding, _ in detector.scan_with_waste(trace, DetectorConfig())]
+        assert [finding.severity for finding in scanned] == ["critical", "warning"]
+        assert [finding.severity for finding in detector.run(trace, DetectorConfig())] == [
+            "warning",
+            "critical",
+        ]
+
+    def test_r13_retry_storm_run_returns_sorted_findings(self) -> None:
+        """R13: two storms in one agent, the critical one first in scan order."""
+        builder = TraceBuilder()
+        for _ in range(5):
+            builder.tool_call(status="error", result_preview="boom")
+        for _ in range(15):
+            builder.tool_call(status="ok")
+        for _ in range(3):
+            builder.tool_call(status="error", result_preview="boom")
+        trace = builder.build()
+        detector = detector_by_slug("retry_storm")
+        scanned = [finding for finding, _ in detector.scan_with_waste(trace, DetectorConfig())]
+        assert [finding.severity for finding in scanned] == ["critical", "warning"]
+        assert [finding.severity for finding in detector.run(trace, DetectorConfig())] == [
+            "warning",
+            "critical",
+        ]
+
+    def test_r13_repeated_tool_call_run_returns_sorted_findings(self) -> None:
+        """R13: the third ``WasteAttributor``, for symmetry rather than for a gap."""
+        builder = TraceBuilder()
+        for _ in range(4):
+            parent = builder.model_call(usage=tokens(10))
+            builder.tool_call(parent=parent, digest=DIGEST_A)
+        for _ in range(2):
+            parent = builder.model_call(usage=tokens(10))
+            builder.tool_call(parent=parent, digest=DIGEST_B)
+        trace = builder.build()
+        detector = detector_by_slug("repeated_tool_call")
+        found = detector.run(trace, DetectorConfig())
+        assert [finding.severity for finding in found] == ["warning", "critical"]
+        assert found == sort_findings(found)

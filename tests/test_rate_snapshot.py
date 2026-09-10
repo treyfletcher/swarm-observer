@@ -134,12 +134,52 @@ class TestParseRateR26:
             "01",
             "1.0000000000000",
             "0x10",
+            # The increment-1 B5 trap, recurring: `$` also matches immediately
+            # before a trailing newline, so `re.match` would accept these three
+            # and only `fullmatch` rejects them. Found by mutation R05.
+            "1\n",
+            "0.5\n",
+            "1\n\n",
         ],
     )
     def test_r26_a_string_that_is_not_a_plain_decimal_is_refused(self, text: str) -> None:
         """R26: the accepted alphabet is narrower than ``Decimal`` accepts."""
         with pytest.raises(ValueError):
             parse_rate(text)
+
+    def test_r26_the_rate_pattern_is_anchored_at_both_ends(self) -> None:
+        """R26: ``fullmatch``, not ``match`` — the ``$``-versus-end-of-input trap.
+
+        ``^…$`` under ``re.match`` accepts a trailing newline, so a rate of
+        ``"15\\n"`` in the JSON would load as ``Decimal("15")`` and nothing would
+        say so. The premise is asserted so the test cannot pass by the pattern
+        having changed shape.
+        """
+        import re
+
+        from swarm_observer.cost.source import _RATE_TEXT
+
+        assert re.compile(_RATE_TEXT.pattern).match("15\n") is not None
+        assert _RATE_TEXT.fullmatch("15\n") is None
+        with pytest.raises(ValueError):
+            parse_rate("15\n")
+        assert parse_rate("15") == Decimal("15")
+
+    def test_r26_model_keys_are_sorted_even_when_the_file_is_not(self) -> None:
+        """R31: ``by_model`` is ordered by key, so the source must sort rather than
+        return insertion order.
+
+        The shipped file happens to list its models alphabetically, which makes
+        a "sorted" assertion against it vacuous — mutation S09 survived on
+        exactly that. This snapshot inserts them backwards.
+        """
+        snapshot = _snapshot({"z-model": FULL_ENTRY, "a-model": FULL_ENTRY, "m-model": FULL_ENTRY})
+        assert list(snapshot.models) == ["z-model", "a-model", "m-model"]
+        assert SnapshotRateSource(snapshot=snapshot).model_keys() == (
+            "a-model",
+            "m-model",
+            "z-model",
+        )
 
     def test_r26_float_rejection_is_not_vacuous(self) -> None:
         """R26: the float that is refused is one whose Decimal value is wrong.

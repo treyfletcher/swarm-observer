@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 
 from swarm_observer import __version__
+from swarm_observer.cli import main as cli_main
 from swarm_observer.cli.main import (
     EXIT_FAIL_CLOSED,
     EXIT_FINDINGS,
@@ -51,6 +52,7 @@ from swarm_observer.cost.compute import CostError, format_usd
 from swarm_observer.cost.snapshot import SnapshotRateSource
 from swarm_observer.detect.base import DetectorConfig, build_finding
 from swarm_observer.detect.registry import ALL_DETECTORS, DETECTOR_SLUGS
+from swarm_observer.ingest.registry import DEFAULT_ADAPTER, build_adapter
 from swarm_observer.ingest.source import IngestLimits
 from swarm_observer.model.trace import TRACE_SCHEMA_VERSION, TokenUsage
 
@@ -823,6 +825,83 @@ class TestPipelineWiringR38:
         for finding in document["findings"]:
             if finding["wasted"]["total_tokens"] == 0:
                 assert finding["wasted_cost_usd"] == "0.000000"
+
+    def test_r39_the_four_exit_codes_are_the_literal_numbers_r39_pins(self) -> None:
+        """R39 (mutation M02): asserted as literals, not read back from the module.
+
+        Every other exit-code test in this file compares against ``EXIT_*``, so
+        moving a constant moves the assertion with it — a self-referential check.
+        A script wrapping this tool reads the numbers, not the names.
+        """
+        assert (EXIT_OK, EXIT_FINDINGS, EXIT_FAIL_CLOSED, EXIT_USAGE) == (0, 1, 2, 3)
+
+    def test_r39_a_findings_run_exits_with_the_literal_one(self, tmp_path: Path) -> None:
+        """R39 (M02): the number a CI job branches on."""
+        report = tmp_path / "r.json"
+        code, _, _ = invoke(
+            "analyze", str(DUPLICATE), "--json", str(report), "--fail-on", "critical"
+        )
+        assert code == 1
+
+    def test_r38_no_previews_is_plumbed_to_the_adapter_and_not_only_to_the_renderer(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A10 (mutation M22): the flag must reach *ingestion*.
+
+        A10 chose ingest-time blanking so the hostile bytes "do not exist in the
+        process after ingestion", rather than existing and being trusted not to
+        leak. Since A-c6 added the render-boundary guard, the two produce the
+        same report — so dropping the ingest half changes no output byte and
+        nothing in the suite could see it. What is left to assert is the wiring
+        itself, which is the only observable form the security property has.
+        """
+        seen: list[bool] = []
+        real = cli_main.build_adapter
+
+        def recording(slug: str, **kwargs: Any) -> Any:
+            seen.append(bool(kwargs.get("no_previews")))
+            return real(slug, **kwargs)
+
+        monkeypatch.setattr(cli_main, "build_adapter", recording)
+        invoke("analyze", str(HOSTILE), "--json", str(tmp_path / "a.json"), "--no-previews")
+        invoke("analyze", str(HOSTILE), "--json", str(tmp_path / "b.json"))
+        assert seen == [True, False]
+
+    def test_r38_the_adapter_really_blanks_previews_on_the_model(self, tmp_path: Path) -> None:
+        """A10 (M22): the other half — the ``Trace`` itself carries no free text."""
+        blanked = build_adapter(DEFAULT_ADAPTER, no_previews=True).load((HOSTILE,), IngestLimits())
+        kept = build_adapter(DEFAULT_ADAPTER, no_previews=False).load((HOSTILE,), IngestLimits())
+        assert all(span.text_preview == "" for span in blanked.spans)
+        assert all(span.tool_input_preview == "" for span in blanked.spans)
+        assert all(span.tool_result_preview == "" for span in blanked.spans)
+        assert any(span.tool_input_preview for span in kept.spans), "vacuous: no previews at all"
+
+    def test_r17_a_findings_priced_waste_reaches_the_document_as_a_positive_number(
+        self, tmp_path: Path
+    ) -> None:
+        """R17/R29 (mutation G02): the waste map must survive the pipeline.
+
+        Replacing the attribution with an empty tuple in
+        ``run_detectors_with_waste`` turns every ``wasted_cost_usd`` into
+        ``0.000000`` and every per-detector waste into zero, and left the suite
+        green: nothing asserted that *some* finding has a non-zero attributed
+        cost end to end.
+        """
+        report = tmp_path / "r.json"
+        assert invoke("analyze", str(DUPLICATE), "--json", str(report))[0] == EXIT_OK
+        document = json.loads(report.read_text())
+        costs = [
+            Decimal(finding["wasted_cost_usd"])
+            for finding in document["findings"]
+            if finding["wasted_cost_usd"] is not None
+        ]
+        assert costs, "no finding carried a priced waste at all"
+        assert max(costs) > 0
+        assert any(finding["wasted"]["total_tokens"] > 0 for finding in document["findings"])
+        waste_rows = document["cost"]["by_detector"]
+        assert waste_rows
+        assert any(Decimal(row["wasted_cost_usd"]) > 0 for row in waste_rows)
+        assert any(row["wasted"]["total_tokens"] > 0 for row in waste_rows)
 
     def test_r38_the_report_names_the_tool_version_and_the_rate_snapshot(
         self, tmp_path: Path

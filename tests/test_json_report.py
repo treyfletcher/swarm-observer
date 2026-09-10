@@ -482,6 +482,23 @@ class TestRedactionAtTheBoundaryR33:
             "occurrences": 2,
         }
 
+    def test_r33_the_redactor_runs_on_the_named_key_and_not_on_every_string(self) -> None:
+        """R16/R33 (mutation J16): ``and``, not ``or``.
+
+        Widening the condition to any string value looks harmless — every other
+        string metric is a slug this package wrote — but it moves the guarantee
+        from "we know which value came from the trace" to "we redact everything
+        and hope". The distinction is only visible on a key that is *not*
+        trace-derived carrying a credential-shaped value, which R16 forbids a
+        ``Finding`` from constructing and which ``metrics_document`` must
+        nevertheless pass through unchanged.
+        """
+        rendered = metrics_document({"reason": "AKIAIOSFODNN7EXAMPLE", "occurrences": 1})
+        assert rendered == {"reason": "AKIAIOSFODNN7EXAMPLE", "occurrences": 1}
+        assert metrics_document({"tool_name": "AKIAIOSFODNN7EXAMPLE"}) == {
+            "tool_name": marker("aws_key_id")
+        }
+
     def test_r33_the_summary_is_not_redacted_because_it_has_no_trace_bytes(self) -> None:
         """R16: ``summary`` is built from integers and this package's own slugs."""
         finding = build_finding(

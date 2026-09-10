@@ -969,6 +969,151 @@ class TestWasteCostR31:
         assert seen, "the corpus produced no findings at all"
 
 
+class TestMutationGapsR28R29R30R31:
+    """Cases the mutation sweep found nothing asserting.
+
+    Every test here corresponds to a mutant that survived the first sweep of
+    this branch. They are grouped rather than scattered so the next sweep can
+    see what the last one bought, and each names its mutant id.
+    """
+
+    def test_r29_the_canonical_zero_keeps_its_exponent_through_a_sum(self) -> None:
+        """R29 (C04, C11): ``sum_usd`` starts from ``ZERO_USD``, not ``Decimal(0)``.
+
+        The module's own claim is that an empty sum "carries the same exponent as
+        a non-empty one and formats identically". ``Decimal`` equality ignores
+        the exponent, so ``== Decimal("0.000000")`` cannot see the difference;
+        ``str`` can.
+        """
+        assert str(ZERO_USD) == "0.000000"
+        assert str(sum_usd([])) == "0.000000"
+        assert str(sum_usd([Decimal("1.5")])) == "1.500000"
+        assert str(sum_usd([Decimal("0.5"), Decimal("0.25")])) == "0.750000"
+
+    def test_r29_the_precision_constant_is_sixty(self) -> None:
+        """R29 (C06): pinned as a literal, not read back from the module.
+
+        The trap tests below build their token counts from ``COST_PRECISION``,
+        which makes them adapt to a changed constant and therefore blind to it —
+        a self-referential check. The literal is asserted here and used there.
+        """
+        assert COST_PRECISION == 60
+
+    def test_r29_a_sixty_digit_token_count_prices_and_a_sixty_one_digit_one_does_not(
+        self,
+    ) -> None:
+        """R29 (C06): the boundary at absolute digit counts, not relative ones."""
+        sixty = TokenUsage(input_tokens=int("1" * 60))
+        sixty_one = TokenUsage(input_tokens=int("1" * 61))
+        assert price_usage(sixty, {"input": Decimal("3")}) == oracle_cost(
+            sixty, {"input": Fraction(3)}
+        )
+        with pytest.raises(CostError):
+            price_usage(sixty_one, {"input": Decimal("3")})
+
+    def test_r28_a_non_zero_component_with_no_rate_contributes_nothing(self) -> None:
+        """R28 (C12, C13): "a component whose rate is absent contributes nothing".
+
+        Both halves of ``rate is None or tokens == 0`` matter. With ``and``, or
+        with the rate check dropped, this call multiplies an ``int`` by ``None``.
+        R30's ``rate_key_missing`` is what stops the *engine* reaching here, but
+        ``price_usage`` is a public function and must not depend on its caller.
+        """
+        assert price_usage(TokenUsage(input_tokens=5), {}) == ZERO_USD
+        assert price_usage(
+            TokenUsage(input_tokens=5, output_tokens=7), {"output": Decimal("15")}
+        ) == oracle_cost(TokenUsage(output_tokens=7), {"output": Fraction(15)})
+
+    def test_r30_missing_price_keys_are_sorted_not_in_formula_order(self) -> None:
+        """R30 (C20): a case where the two orders differ.
+
+        ``USAGE_PRICE_KEYS`` runs ``output`` before ``cache_read``; sorted runs
+        ``cache_read`` first. The earlier test's pair happened to agree.
+        """
+        source = source_of({"m-1": RateEntry(input="1")})
+        usage = TokenUsage(output_tokens=1, cache_read_input_tokens=1)
+        missing = missing_price_keys(usage, rates_for(source, "m-1"))
+        assert missing == ("cache_read", "output")
+        assert [price for _, price in USAGE_PRICE_KEYS].index("output") < [
+            price for _, price in USAGE_PRICE_KEYS
+        ].index("cache_read"), "the two orders no longer differ; pick another pair"
+
+    def test_r17_an_attributed_seq_one_past_the_end_is_ignored(self) -> None:
+        """R17 (C26): ``seq >= len(spans)``, at exactly ``len(spans)``.
+
+        The earlier test handed in 999 and -1, which both fail either form of the
+        bound. Exactly one past the end is the only value that tells them apart,
+        and the wrong form is an ``IndexError`` out of the cost engine.
+        """
+        trace = TraceBuilder()
+        trace.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        built = trace.build()
+        key = "repeated_tool_call:abcdef012345"
+        report = compute_costs(built, SHIPPED, waste_seqs={key: (len(built.spans),)})
+        assert report.waste_by_finding[key] == ZERO_USD
+
+    def test_r17_an_attributed_model_call_with_no_usage_is_not_relevant(self) -> None:
+        """R17 (C27): the filter is ``model_call`` **and** ``usage is not None``.
+
+        A model call with no usage contributes no tokens, so it must not make the
+        finding's cost *unknown* either — dropping the usage half turns a
+        ``0.000000`` into a ``None``.
+        """
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=None)
+        built = builder.build()
+        key = "agent_loop:abcdef012345"
+        report = compute_costs(built, SHIPPED, waste_seqs={key: (0,)})
+        assert report.waste_by_finding[key] == ZERO_USD
+        assert report.waste_by_finding[key] is not None
+
+    def test_r17_a_seq_attributed_twice_is_counted_once(self) -> None:
+        """R17 (C28): "distinct" model calls — ``sorted(set(seqs))``."""
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        built = builder.build()
+        key = "repeated_tool_call:abcdef012345"
+        once = compute_costs(built, SHIPPED, waste_seqs={key: (0,)})
+        twice = compute_costs(built, SHIPPED, waste_seqs={key: (0, 0, 0)})
+        assert twice.waste_by_finding[key] == once.waste_by_finding[key]
+        assert twice.by_detector[0].wasted == once.by_detector[0].wasted
+
+    def test_r31_by_detector_rows_are_sorted_by_slug(self) -> None:
+        """R31 (C31): six slugs, so set order cannot pass for sorted by accident.
+
+        ``list(set(...))`` and ``sorted(...)`` agree on one element and agree by
+        chance on a few; with six they agree for one permutation in 720. That is
+        the honest strength of this kill and it is stated rather than implied.
+        """
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        built = builder.build()
+        slugs = ["zeta_d", "mike_d", "alpha_d", "romeo_d", "delta_d", "kilo_d"]
+        report = compute_costs(
+            built,
+            SHIPPED,
+            waste_seqs={f"{slug}:abcdef01234{index}": (0,) for index, slug in enumerate(slugs)},
+        )
+        assert [row.detector for row in report.by_detector] == sorted(slugs)
+
+    def test_r31_two_undeclared_agents_get_distinct_non_negative_indexes(self) -> None:
+        """R31 (C33): the undeclared-agent fallback, with two of them.
+
+        One undeclared agent gets index 0 under either arithmetic. Two is the
+        first case that can tell ``len(index_of) + offset`` from
+        ``len(index_of) - offset``.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="bravo", model="claude-haiku-4-5", usage=TokenUsage())
+        builder.model_call(agent_id="alpha", model="claude-haiku-4-5", usage=TokenUsage())
+        built = builder.build().model_copy(update={"agents": ()})
+        report = compute_costs(built, SHIPPED)
+        assert [(row.agent_id, row.agent_index) for row in report.by_agent] == [
+            ("alpha", 0),
+            ("bravo", 1),
+        ]
+
+
 class TestCorpusInvariantsR31:
     """R30/R31 over every checked-in fixture, not only over a hand-built trace."""
 

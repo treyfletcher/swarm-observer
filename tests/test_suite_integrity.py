@@ -42,7 +42,7 @@ REQUIRED_CANARIES: dict[str, int] = {
     "detector_coverage_dropped": 2,
 }
 
-CURRENT_INCREMENT = 1
+CURRENT_INCREMENT = 2
 
 
 def all_test_modules() -> list[str]:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import socket
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -583,15 +584,6 @@ class TestExitCodesR39:
         assert code == EXIT_USAGE
         assert "size limit must be a positive integer" in err
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-5: check_output_path rejects only a directory, and atomic_write_texts "
-            "renames over its destination, so naming a FIFO, socket or device node "
-            "destroys it and the run reports success. `--json /dev/null` — a natural way "
-            "to ask for the exit code alone — replaces /dev/null with a regular file."
-        ),
-    )
     def test_r39_an_output_path_that_is_not_a_regular_file_is_refused(self, tmp_path: Path) -> None:
         """R11/R39: the reader refuses a non-regular *input*; the writer must match.
 
@@ -606,23 +598,59 @@ class TestExitCodesR39:
         assert code == EXIT_USAGE
         assert target.is_fifo()
 
-    def test_r39_bug5_reproduces_as_a_destroyed_fifo(self, tmp_path: Path) -> None:
-        """R11: BUG-5 pinned as it behaves today, beside its xfail.
+    def test_r39_the_refusal_writes_nothing_and_says_nothing_on_stdout(
+        self, tmp_path: Path
+    ) -> None:
+        """R11 (BUG-5, fixed in review): nothing written, nothing claimed.
 
-        A FIFO rather than a character device on purpose: reproducing this
-        against ``/dev/null`` destroys ``/dev/null`` for the whole machine, which
-        is how it was found.
+        Replaces the reproduction that pinned the destroyed FIFO. "Exit 3" alone
+        would be satisfied by a run that refused *after* replacing the node, so
+        the surviving node and the empty stdout are asserted with it.
         """
         target = tmp_path / "pipe"
         os.mkfifo(target)
+        code, out, err = invoke("analyze", str(CLEAN), "--json", str(target))
+        assert (code, out) == (EXIT_USAGE, "")
+        assert "not a regular file" in err
         assert target.is_fifo()
-        code, out, _ = invoke("analyze", str(CLEAN), "--json", str(target))
-        assert code == EXIT_OK
-        assert out.startswith("wrote ")
-        assert not target.is_fifo(), (
-            "BUG-5 appears to be fixed: delete this test and de-xfail the one above"
-        )
-        assert target.is_file()
+
+    def test_r39_a_socket_and_a_symlink_to_one_are_refused_too(self, tmp_path: Path) -> None:
+        """R11: the guard is over "not a regular file", not over one node type.
+
+        A FIFO is the cheap reproduction; a socket and a symlink pointing at one
+        are the same condition reached differently, and a guard written against
+        ``is_fifo()`` would pass the first and fail these — the "correct for the
+        call path that exists" shape this project keeps re-finding.
+        """
+        sock = tmp_path / "sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(str(sock))
+            link = tmp_path / "link"
+            link.symlink_to(sock)
+            for target in (sock, link):
+                code, out, _ = invoke("analyze", str(CLEAN), "--json", str(target))
+                assert (code, out) == (EXIT_USAGE, "")
+            assert sock.is_socket()
+            assert link.is_symlink()
+
+    def test_r39_an_existing_regular_file_and_a_symlink_to_one_are_still_accepted(
+        self, tmp_path: Path
+    ) -> None:
+        """R11: the non-vacuous arm — overwriting a report is the normal case.
+
+        Without this, the guard above is satisfied by refusing every path that
+        already exists, which would break re-running ``analyze`` over the same
+        output — the single most common invocation there is.
+        """
+        report = tmp_path / "r.json"
+        report.write_text("PRE-EXISTING\n")
+        link = tmp_path / "link.json"
+        link.symlink_to(report)
+        for target in (report, link):
+            target.write_text("PRE-EXISTING\n") if not target.is_symlink() else None
+            code, _, err = invoke("analyze", str(CLEAN), "--json", str(target))
+            assert (code, err) == (EXIT_OK, "")
+            assert json.loads(target.read_text())["meta"]["adapter"] == DEFAULT_ADAPTER
 
     def test_r39_a_negative_blocked_gap_is_a_usage_error(self, tmp_path: Path) -> None:
         """R25/R39: the one tunable, validated at the boundary."""
@@ -1297,15 +1325,6 @@ class TestSummaryLineSanitationR40:
         _, _, err = invoke("analyze", str(CLEAN), "--json", "k.json", "--detector", "x\x1by")
         assert "\x1b" not in err
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-6: summary_line does not pass the written paths through _one_line_safe, "
-            "so an output path containing an ESC, a BEL or any other C0 control character "
-            "reaches the terminal raw on the success path. Every stderr path in this "
-            "package is sanitized; stdout is not (R40, R11)."
-        ),
-    )
     @pytest.mark.parametrize("control", ["\x1b", "\x07", "\r", "\x0b"])
     def test_r40_a_control_character_in_the_output_path_is_neutralized(
         self, tmp_path: Path, control: str
@@ -1320,46 +1339,63 @@ class TestSummaryLineSanitationR40:
         assert code == EXIT_OK
         assert control not in out
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-6: a newline in the output path makes analyze's stdout two lines, "
-            "breaking R40's pinned 'one line naming the written paths'. A wrapper doing "
-            "`read -r line` sees a truncated report and the remainder becomes a second "
-            "line it may parse as another run."
-        ),
-    )
     def test_r40_stdout_is_one_line_whatever_the_output_path_contains(self, tmp_path: Path) -> None:
         """R40: "writes nothing to stdout on success except one line"."""
         code, out, _ = self._run(tmp_path, "two\nlines.json")
         assert code == EXIT_OK
         assert out.count("\n") == 1
 
-    def test_r40_bug6_reproduces_as_a_two_line_stdout(self, tmp_path: Path) -> None:
-        """R40: BUG-6 pinned as it behaves today, beside its xfails.
+    def test_r40_the_forged_second_summary_line_cannot_be_produced(self, tmp_path: Path) -> None:
+        """R40 (BUG-6, fixed in review): the misreport, driven end to end.
 
-        The second line is made to look exactly like a summary line of its own,
-        which is the shape that turns a cosmetic defect into a misreport: a
-        wrapper reading the *last* line of stdout is told a different story from
-        one reading the first.
+        Replaces the reproduction that pinned the two-line stdout. The forged
+        text is chosen to read as a summary line of its own reporting a run that
+        wrote nothing, so a wrapper reading the *last* line of stdout was told a
+        different story from one reading the first. Both readings must now agree.
         """
         forged = "b\nwrote nothing; findings: critical=0 warning=0 info=0.json"
         code, out, _ = self._run(tmp_path, forged)
         assert code == EXIT_OK
         lines = out.splitlines()
-        assert len(lines) == 2, (
-            "BUG-6 appears to be fixed: delete this test and de-xfail the ones above"
-        )
+        assert len(lines) == 1
+        assert lines[0] == lines[-1]
         assert lines[0].startswith("wrote ")
-        assert lines[1].startswith("wrote nothing; findings:")
+        assert lines[0].endswith("; findings: critical=0 warning=0 info=0")
 
-    def test_r40_bug6_reproduces_as_a_raw_escape_on_stdout(self, tmp_path: Path) -> None:
-        """R40/R11: the control-character half, pinned as it behaves today."""
-        code, out, _ = self._run(tmp_path, "r\x1b[31mx.json")
-        assert code == EXIT_OK
-        assert "\x1b" in out, (
-            "BUG-6 appears to be fixed: delete this test and de-xfail the ones above"
-        )
+    def test_r40_every_c0_control_and_del_is_neutralized_on_stdout(self, tmp_path: Path) -> None:
+        """R40/R11: the whole C0 range plus DEL, not the four the report named.
+
+        A guard written against the reported characters is the defect this
+        project keeps shipping, so every code point ``_one_line_safe`` claims is
+        driven. NUL is excluded: it is refused earlier as a usage error (BUG-7)
+        and never reaches this line.
+        """
+        for point in [*range(0x01, 0x20), 0x7F]:
+            code, out, _ = self._run(tmp_path, f"r{chr(point)}x.json")
+            assert code == EXIT_OK, hex(point)
+            # The line's own terminator is the one newline allowed, so the
+            # assertion is over the line's body rather than over the whole
+            # stream — otherwise 0x0A could never be driven at all.
+            assert out.endswith("\n"), hex(point)
+            body = out[:-1]
+            assert chr(point) not in body, hex(point)
+            assert "\n" not in body, hex(point)
+
+    def test_r40_the_report_is_written_at_the_path_the_user_actually_typed(
+        self, tmp_path: Path
+    ) -> None:
+        """R40: sanitation is a property of the *line*, not of the filename.
+
+        The arm that keeps the fix honest: neutralizing the control character in
+        the path itself — rather than in the line naming it — would pass every
+        assertion above while writing the report somewhere the user did not ask
+        for. The file has to be at the raw path.
+        """
+        target = tmp_path / "r\x1bx.json"
+        code, out, err = invoke("analyze", str(CLEAN), "--json", str(target))
+        assert (code, err) == (EXIT_OK, "")
+        assert target.is_file()
+        assert "\x1b" not in out
 
     def test_r40_an_ordinary_path_produces_exactly_one_clean_line(self, tmp_path: Path) -> None:
         """R40: the non-vacuous arm — the ordinary case is already correct, so

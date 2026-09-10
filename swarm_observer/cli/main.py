@@ -282,6 +282,19 @@ def check_output_path(raw: str) -> Path:
         )
     if path.is_dir():
         raise UsageError(f"{PROGRAM}: error: output path is a directory: {_one_line_safe(raw)}")
+    if path.exists() and not path.is_file():
+        # Not just a directory (review, BUG-5). `atomic_write_texts` finishes
+        # with `os.replace`, which happily replaces a FIFO, a socket or a device
+        # node with a regular file — `--json /dev/null`, the natural way to ask
+        # a CI job for the exit code alone, destroyed `/dev/null` for the whole
+        # machine and printed `wrote /dev/null`. R11's posture is that the tool
+        # leaves the filesystem as it found it, and the reader already refuses a
+        # non-regular *input* (`not_a_regular_file`); the writer now matches.
+        # `exists()` follows symlinks, so a symlink to a FIFO is refused too and
+        # a symlink to a regular file is still accepted.
+        raise UsageError(
+            f"{PROGRAM}: error: output path is not a regular file: {_one_line_safe(raw)}"
+        )
     return path
 
 
@@ -350,9 +363,19 @@ def summary_line(written: Sequence[Path], findings: Sequence[Finding]) -> str:
     path carries the working directory and the username into stdout, which R47
     forbids, and two people running the same command from different machines
     must see the same bytes.
+
+    They are also **sanitized** (review, BUG-6). Every ``UsageError`` and every
+    fail-closed line on stderr goes through :func:`_one_line_safe`; this line —
+    the one a CI job parses and a human reads — was the single output in the
+    package that carried a raw path through. An ESC in a filename reprograms the
+    terminal, and a newline made R40's pinned "one line" into two, the second of
+    which can be made to read as a summary line of its own reporting a run that
+    wrote nothing. ``_one_line_safe`` deliberately preserves ``\\n`` (its callers
+    render multi-line argparse usage), so the newline is removed here, where the
+    requirement is one line and not merely a safe one.
     """
     counts = severity_counts(findings)
-    paths = ", ".join(path.as_posix() for path in written)
+    paths = ", ".join(_one_line_safe(path.as_posix()).replace("\n", " ") for path in written)
     tallies = " ".join(f"{name}={counts[name]}" for name in ("critical", "warning", "info"))
     return f"wrote {paths}; findings: {tallies}\n"
 

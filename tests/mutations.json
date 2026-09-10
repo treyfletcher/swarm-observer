@@ -2126,5 +2126,27 @@
       "survived": 2,
       "note": "Designed after wave 1's kills, over anchors wave 1 never touched. Original run: 62 killed, 17 survived. After this increment's tests: 77 killed, 2 survived -- W-C11 (equivalent) and W-M11-CONTROL (the declared control arm, which must survive)."
     }
+  },
+  "final_run": {
+    "commit": "the tip of feature/so-i3",
+    "method": "full serial run of all 231 mutants, one interpreter at a time, nothing else on the machine",
+    "cpython_3.11.15": {
+      "total": 231,
+      "killed": 228,
+      "survived": 3,
+      "not_applied": 0
+    },
+    "cpython_3.12.3": {
+      "total": 231,
+      "killed": 228,
+      "survived": 3,
+      "not_applied": 0
+    },
+    "survivors": [
+      "S11",
+      "W-C11",
+      "W-M11-CONTROL"
+    ],
+    "note": "Identical on both interpreters. S11 and W-C11 are equivalent mutants; W-M11-CONTROL is the declared control arm and MUST survive -- its survival is the evidence that the 228 kills come from the mutations."
   }
 }

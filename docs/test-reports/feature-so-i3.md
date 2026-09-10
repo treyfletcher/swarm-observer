@@ -19,7 +19,7 @@ this increment; their absence is not reported as a failure.
 | Python 3.12.3 | 2035 passed, 12 xfailed — identical counts, identical set |
 | New test modules | 5 (`test_rate_snapshot.py`, `test_cost_engine.py`, `test_redaction.py`, `test_json_report.py`, `test_cli_analyze.py`) plus the R50 canary `canaries/test_canary_redaction_pattern_removed.py` |
 | `ruff check` · `ruff format --check` · `mypy --strict` | clean on both interpreters |
-| Mutation sweep | **231 mutants in two independently-designed waves, run on both interpreters. 228 killed. 3 survive: two proven equivalent and one declared control arm that must survive.** |
+| Mutation sweep | **231 mutants in two independently-designed waves. Full serial run at the final commit on both interpreters: 228 killed, 0 unapplied, 3 survive — two proven equivalent and one declared control arm that must survive.** |
 | Bugs found | **7**, all pinned by a strict xfail plus a live reproduction |
 | Spec flags raised | **S20–S23** (continuing from the coder's S19) |
 | `tests/allowed_skips.txt` | still empty, as required |
@@ -320,6 +320,20 @@ this team has been burned by.** Three measurements, not one:
 3. **Survivor recheck at the final commit**, serially: all 23 wave-1 survivors
    and all 17 wave-2 survivors re-applied against the finished suite. 22 of 23
    and 15 of 17 are now killed.
+4. **Confirming full 231-mutant re-runs at the final commit, on both
+   interpreters, each run serially with the other sweep not running.** Both
+   report, verbatim:
+
+   ```
+   TOTAL 231  killed 228  SURVIVED 3  not-applied 0
+   survivors: ['S11', 'W-C11', 'W-M11-CONTROL']
+   not applied: []
+   ```
+
+   These are the numbers. Measurement (4) is the whole set applied one mutant at
+   a time against the finished suite, so the headline figure is measured
+   directly rather than assembled from (1)–(3), and those three are now merely
+   corroboration. The two interpreters name the same three survivors.
 
 The run logs live in the tester's scratchpad and do **not** survive the session.
 The durable record is `tests/mutations.json`, which carries all 231 mutants as
@@ -329,13 +343,12 @@ answer, which is the point of checking it in. Anchors are asserted unique
 before application, so a mutant whose anchor has drifted is reported rather
 than silently skipped.
 
-The combined figure rests on (1)+(2) for the kills and (3) for the survivors.
-That composition is sound in one direction only, and it is the safe direction:
-adding tests can turn a survivor into a kill but can never turn a kill into a
-survivor, so no mutant counted as killed in (1) or (2) can have become a
-survivor by (3). A full 231-mutant re-run at the final commit was started and is
-the obvious confirmation to run before merge; it was not completed inside this
-session's budget, and I would rather say that than round it up.
+Nothing in the headline figure is composed. It is measurement (4) on each
+interpreter: 231 mutants applied one at a time against the finished suite, 228
+killed, 3 survived, 0 unapplied, the same three named on both. Measurements
+(1)–(3) are kept in this report because they are what the sweep *found* — 23
+and then 17 real gaps — which is the part a reviewer should weigh, and because
+they are the record of how the number moved.
 
 Wave 2's first run, against the tests that already existed after wave 1's kills,
 left **17** survivors — sixteen of them real gaps, now closed. That is the
@@ -420,7 +433,7 @@ and all three are versions of *the test could not have failed*:
 | --- | --- | --- |
 | Full suite | 2035 passed, 12 xfailed | 2035 passed, 12 xfailed |
 | `mypy --strict` | clean | clean |
-| Mutation sweep (231) | 228 killed, 3 survived | 228 killed, 3 survived |
+| Mutation sweep (231, full serial run at the final commit) | 228 killed, 3 survived, 0 unapplied | 228 killed, 3 survived, 0 unapplied |
 | Survivor set | `S11`, `W-C11`, `W-M11-CONTROL` | identical |
 
 **Nothing differs.** Both interpreters were verified to import the tree under
@@ -487,7 +500,8 @@ pins that choice.
 3. **The control arm.** `W-M11-CONTROL` is the only thing in this report that
    demonstrates the sweep can report "not killed" for the right reason. If you
    disagree that it is a genuine no-op, the 228 kills lose their warrant. It is
-   one line in `tests/mutations.json`.
+   one line in `tests/mutations.json`, and it survived on both interpreters in
+   the full serial run.
 4. **`LEAKING_PATHS` in `test_json_report.py`.** It is a checked-in *bug
    report*, not a contract, and it is compared as a set. That makes it the one
    place in this suite where a new leak in increment 4 fails automatically —

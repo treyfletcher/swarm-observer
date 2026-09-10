@@ -7,7 +7,7 @@
     "tests/canaries/test_canary_redaction_pattern_removed.py": 22,
     "tests/test_adversarial_inputs.py": 142,
     "tests/test_boundaries_and_posture.py": 43,
-    "tests/test_cli_analyze.py": 91,
+    "tests/test_cli_analyze.py": 104,
     "tests/test_collapse_r9.py": 33,
     "tests/test_cost_engine.py": 157,
     "tests/test_detector_adversarial.py": 98,

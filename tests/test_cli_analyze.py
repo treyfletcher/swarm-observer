@@ -53,7 +53,7 @@ from swarm_observer.cost.snapshot import SnapshotRateSource
 from swarm_observer.detect.base import DetectorConfig, build_finding
 from swarm_observer.detect.registry import ALL_DETECTORS, DETECTOR_SLUGS
 from swarm_observer.ingest.registry import DEFAULT_ADAPTER, build_adapter
-from swarm_observer.ingest.source import IngestLimits
+from swarm_observer.ingest.source import IngestLimits, TraceError
 from swarm_observer.model.trace import TRACE_SCHEMA_VERSION, TokenUsage
 
 from .detector_corpus import FIXTURE_DIR
@@ -1272,3 +1272,175 @@ class TestWaveTwoGapsR38R39R40:
             assert not err.endswith("\n\n")
             assert "Traceback" not in err
             assert err.rstrip("\n").splitlines()[-1].startswith("swarm-observer")
+
+
+class TestSummaryLineSanitationR40:
+    """R40 (BUG-6): the one line ``analyze`` writes to stdout, for hostile paths.
+
+    R40 pins ``analyze``'s stdout as **one line** naming the written paths and
+    the counts. ``cli/main._one_line_safe`` exists to neutralize the ASCII
+    control characters that reprogram a terminal, and every ``UsageError`` and
+    every fail-closed line on *stderr* goes through it. :func:`summary_line`
+    does not, so the success path — the one a CI job parses and a human reads —
+    is the only output in this package that carries a raw path through.
+
+    The path is one the user typed, which is why this is a low-severity bug
+    rather than an injection. It is still a broken pinned contract: a newline in
+    the path makes stdout two lines, and ``read -r line`` in a wrapper script
+    then reports a run that wrote nothing.
+    """
+
+    @staticmethod
+    def _run(tmp_path: Path, filename: str) -> tuple[int, str, str]:
+        return invoke("analyze", str(CLEAN), "--json", str(tmp_path / filename))
+
+    def test_r40_the_control_safe_helper_is_the_one_stderr_already_uses(self) -> None:
+        """R40/R11: the premise — the package already owns the fix.
+
+        Asserted so the bug report cannot be answered with "there is no
+        sanitizer": there is, it is applied on the error paths, and the success
+        path is the one place it is not.
+        """
+        assert cli_main._one_line_safe("a\x1bb\x07c") == "a b c"
+        assert cli_main._one_line_safe("keep\nthe newline") == "keep\nthe newline"
+        _, _, err = invoke("analyze", str(CLEAN), "--json", "k.json", "--detector", "x\x1by")
+        assert "\x1b" not in err
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "BUG-6: summary_line does not pass the written paths through _one_line_safe, "
+            "so an output path containing an ESC, a BEL or any other C0 control character "
+            "reaches the terminal raw on the success path. Every stderr path in this "
+            "package is sanitized; stdout is not (R40, R11)."
+        ),
+    )
+    @pytest.mark.parametrize("control", ["\x1b", "\x07", "\r", "\x0b"])
+    def test_r40_a_control_character_in_the_output_path_is_neutralized(
+        self, tmp_path: Path, control: str
+    ) -> None:
+        """R40/R11: stdout carries no character that reprograms a terminal.
+
+        NUL is excluded here and covered by BUG-7 below: it never reaches this
+        line because it raises out of ``check_output_path`` first, which is a
+        different defect with a different exit code.
+        """
+        code, out, _ = self._run(tmp_path, f"r{control}x.json")
+        assert code == EXIT_OK
+        assert control not in out
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "BUG-6: a newline in the output path makes analyze's stdout two lines, "
+            "breaking R40's pinned 'one line naming the written paths'. A wrapper doing "
+            "`read -r line` sees a truncated report and the remainder becomes a second "
+            "line it may parse as another run."
+        ),
+    )
+    def test_r40_stdout_is_one_line_whatever_the_output_path_contains(self, tmp_path: Path) -> None:
+        """R40: "writes nothing to stdout on success except one line"."""
+        code, out, _ = self._run(tmp_path, "two\nlines.json")
+        assert code == EXIT_OK
+        assert out.count("\n") == 1
+
+    def test_r40_bug6_reproduces_as_a_two_line_stdout(self, tmp_path: Path) -> None:
+        """R40: BUG-6 pinned as it behaves today, beside its xfails.
+
+        The second line is made to look exactly like a summary line of its own,
+        which is the shape that turns a cosmetic defect into a misreport: a
+        wrapper reading the *last* line of stdout is told a different story from
+        one reading the first.
+        """
+        forged = "b\nwrote nothing; findings: critical=0 warning=0 info=0.json"
+        code, out, _ = self._run(tmp_path, forged)
+        assert code == EXIT_OK
+        lines = out.splitlines()
+        assert len(lines) == 2, (
+            "BUG-6 appears to be fixed: delete this test and de-xfail the ones above"
+        )
+        assert lines[0].startswith("wrote ")
+        assert lines[1].startswith("wrote nothing; findings:")
+
+    def test_r40_bug6_reproduces_as_a_raw_escape_on_stdout(self, tmp_path: Path) -> None:
+        """R40/R11: the control-character half, pinned as it behaves today."""
+        code, out, _ = self._run(tmp_path, "r\x1b[31mx.json")
+        assert code == EXIT_OK
+        assert "\x1b" in out, (
+            "BUG-6 appears to be fixed: delete this test and de-xfail the ones above"
+        )
+
+    def test_r40_an_ordinary_path_produces_exactly_one_clean_line(self, tmp_path: Path) -> None:
+        """R40: the non-vacuous arm — the ordinary case is already correct, so
+        the failures above are about the hostile path and not about the line."""
+        code, out, err = self._run(tmp_path, "report.json")
+        assert (code, err) == (EXIT_OK, "")
+        assert out.count("\n") == 1
+        assert out.endswith("; findings: critical=0 warning=0 info=0\n")
+        assert not any(ord(char) < 0x20 and char != "\n" for char in out)
+
+
+class TestNulInTheOutputPathR39:
+    """R39 (BUG-7): a NUL in ``--json`` escapes ``main`` as a bare ``ValueError``.
+
+    ``main``'s docstring says it is "the only place a typed error becomes a
+    process outcome" and that "no traceback ever reaches stderr". A path
+    containing a NUL byte walks past it: ``check_output_path`` calls
+    ``Path(raw).parent.is_dir()``, and ``os.stat`` raises
+    ``ValueError("embedded null byte")`` before any of the typed errors
+    ``main`` catches can be raised.
+
+    ``check_output_path``'s own docstring is "an output whose directory does not
+    exist **or cannot be written** is exit 3", which is exactly this case. The
+    console script instead exits 1 with a traceback — and R39 gives 1 the
+    meaning "ran successfully and a finding met the threshold", so a wrapper
+    reading the exit code is told the run succeeded and found something.
+
+    This is BUG-1's shape (a raw exception past ``main``) reached by a far
+    cheaper input: no 60-digit token count, just a byte in an argument.
+    """
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "BUG-7: check_output_path calls is_dir() on a path containing a NUL, which "
+            "raises a bare ValueError('embedded null byte') from outside every except "
+            "clause in main(). R39 pins an unwritable output path as exit 3; this is a "
+            "traceback and exit 1, which R39 assigns to 'a finding met the threshold'."
+        ),
+    )
+    def test_r39_a_nul_in_the_output_path_is_a_usage_error(self, tmp_path: Path) -> None:
+        """R39: an output path that cannot be written is exit 3, not a crash."""
+        code, out, err = invoke("analyze", str(CLEAN), "--json", f"{tmp_path}/r\x00x.json")
+        assert code == EXIT_USAGE
+        assert out == ""
+        assert "Traceback" not in err
+
+    def test_r39_bug7_reproduces_as_a_bare_valueerror_out_of_main(self, tmp_path: Path) -> None:
+        """R39/R11: BUG-7 pinned as it behaves today, beside its xfail."""
+        with pytest.raises(ValueError) as caught:
+            invoke("analyze", str(CLEAN), "--json", f"{tmp_path}/r\x00x.json")
+        assert not isinstance(caught.value, (UsageError, TraceError)), (
+            "BUG-7 appears to be fixed: delete this test and de-xfail the one above"
+        )
+        assert "null byte" in str(caught.value)
+
+    def test_r39_a_nul_in_an_input_path_escapes_the_same_way(self, tmp_path: Path) -> None:
+        """R11/R39: the input side has the identical hole, in ``expand_inputs``.
+
+        Recorded separately because the two are different call sites and a fix
+        that only guards ``check_output_path`` leaves this one open. R11's
+        posture is that *every* unreadable input is a sanitized exit 2.
+        """
+        report = tmp_path / "r.json"
+        with pytest.raises(ValueError) as caught:
+            invoke("analyze", f"{tmp_path}/in\x00put.jsonl", "--json", str(report))
+        assert "null byte" in str(caught.value)
+        assert not report.exists()
+
+    def test_r39_an_ordinary_output_path_is_still_written(self, tmp_path: Path) -> None:
+        """R39: the non-vacuous arm — the same invocation without the NUL works."""
+        report = tmp_path / "rx.json"
+        code, _, err = invoke("analyze", str(CLEAN), "--json", str(report))
+        assert (code, err) == (EXIT_OK, "")
+        assert report.is_file()

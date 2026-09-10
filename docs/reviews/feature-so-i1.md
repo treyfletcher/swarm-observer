@@ -547,6 +547,101 @@ open question for R12.
   The coder flagged this and is right: decide at T17, and the fix is an ingest-time
   pattern constraint, not a render-time patch.
 
+## Post-review addendum: CI's version matrix caught a defect in my own fix
+
+Added after CI ran the real PR. It belongs in this document because it is the
+same failure class the review is about, and this time I was the one who shipped it.
+
+### What happened
+
+My BUG-3 fix routed *any* decoder failure to `invalid_json`, which closes the hole
+only if `json.loads` actually fails on a nesting bomb. **It does on CPython 3.11 and
+does not on CPython 3.12.** 3.12 changed C-level recursion handling, so depths 1,000
+through 5,000 now parse successfully; it only gives up somewhere past 20,000. Two of
+the six parameter cases in my own pinning test therefore failed on 3.12 and passed
+on 3.11 — and the container I worked in has only 3.11, so I never saw it. The reader
+was silently *accepting* input R11 says must fail closed, on half of the supported
+matrix.
+
+### Root cause, stated precisely
+
+Not "3.12 changed". The root cause is that **I treated an interpreter's stack
+exhaustion as a contract.** Where the C stack runs out is a property of the CPython
+version, the build, the platform and how much stack the calling frame already
+consumed — never of the input. A guard whose trigger condition is "the runtime
+happens to give up here" is a guard that reports green while structurally unable to
+fail, which is the exact defect R49 and R50 exist to prevent and the fifth time this
+team has shipped it. That it arrived inside a *fix for* a fail-closed defect, in a
+review whose central complaint was guards that are right about the value in front of
+them, is worth recording rather than smoothing over.
+
+It is also the half-measure I chose knowingly. My S4 ruling implemented the
+non-amending half and left `max_json_depth` to the PM. That was defensible as
+scope discipline and wrong as engineering: the amendment was the part that made the
+guarantee real, and deferring it left a check that looked closed and wasn't.
+
+### The fix
+
+`reader.exceeds_json_depth` — a string-aware, character-wise bound run *before*
+`json.loads`, wired to `IngestLimits.max_json_depth` (default 200) and a
+`json_too_deep` code on `TraceLimitError`. A `str.count` pre-check keeps the common
+path at two C-level scans. The `RecursionError` catch stays as a belt, because
+`max_json_depth` is a knob and raising it past what the interpreter can take must
+still be one sanitized line. Pinned at five depths, at the exact cap boundary, as
+string-aware (a cap counting every `[` would fail closed on a tool result that quotes
+JSON), and — the regression pin that matters — **as giving the identical verdict under
+three different `sys.setrecursionlimit` values**, which stands in for everything that
+varies between interpreters.
+
+### The other version-sensitive behaviour, found by sweeping
+
+**R8's preview normalization is interpreter-dependent, and it will make increment 4's
+goldens version-dependent.** R8 says "replace every character that is not
+`str.isprintable()`", and `str.isprintable()` answers from the Unicode table compiled
+into the interpreter — 14.0 on 3.11, 15.0 on 3.12. Verified end to end:
+
+```
+                     CPython 3.11 (Unicode 14)   CPython 3.12 (Unicode 15)
+U+1F6DC 🛜            'before after'              'before🛜after'
+U+11F00 (Kawi)        'before after'              'before𑼀after'
+```
+
+The same trace, two different `Span.text_preview` values, therefore two different
+report bytes for two analysts on the same input. R8 names `str.isprintable()`
+explicitly so the implementation is correct and I cannot fix it here.
+
+**PM: amend R8 and R47.** R8 should either pin a Unicode version alongside the
+`isprintable` rule, or define printability by an explicit category set the package
+owns. R47's determinism matrix should add the interpreter version to the list of
+things the bytes must be identical across — it currently names `PYTHONHASHSEED`,
+`TZ`, `LC_ALL`, CWD and path order, all of which vary *less* between two developers
+than their Python version does.
+
+What I could fix is the blast radius, and did: committed fixtures and goldens may
+now contain no code point unassigned on the running interpreter, enforced by the
+matrix's *oldest* leg. Verified breakable both ways.
+
+### Everything the sweep found version-independent
+
+Checked on 3.11 and 3.12 and byte-identical on both: all 23 R11 fail-closed input
+classes; the 15-case timestamp corpus, including both `astimezone` overflow
+directions and every malformed shape; `json.loads` on oversized integers,
+non-finite literals and lone surrogates; and `schema_document()`'s bytes — despite
+the two environments carrying different pydantic patch releases, which was the other
+thing I expected to bite.
+
+### The lesson for increments 2–5
+
+CI's version matrix caught what a single-version local run could not, and that is the
+matrix earning its keep rather than a lucky break. Two things follow. First, any
+guard whose trigger is a runtime limit rather than an explicit comparison should be
+treated as unproven until it has been run on every supported interpreter. Second —
+and this is the one that generalises past Python versions — **a "fail closed" claim
+needs a test that pins the *reason* the input was rejected, not merely that it was.**
+My original test asserted `pytest.raises(TraceError)`; had it asserted a specific
+taxonomy code, as the replacement does, the 3.12 divergence would have been visible
+the moment the code changed rather than only when the input stopped raising at all.
+
 ## Increment-1 assessment
 
 The bottom half of the product is the right bottom half. The seams are where the
@@ -568,5 +663,16 @@ complete set of things that can come out of `load()`?* That question is now aske
 directly, by the R4 sweep and by the 23-class probe, and it is the question
 increments 2–5 should inherit at each new boundary.
 
-Merge once the PM has the six spec amendments queued. None of them blocks the
-branch; all of them will block someone in increment 2 if they are not written down.
+Merge once the PM has the spec amendments queued — six from the review proper, plus
+R8/R47's interpreter dependence and R11's depth cap from the addendum above. None of
+them blocks the branch; all of them will block someone in increment 2 if they are not
+written down.
+
+One correction to my own verdict, in light of the addendum. I wrote that the suite
+"cannot report green while broken". That was true of the harness's guards, which I
+tripped, and false of the suite as a whole: it reported green on 3.11 while the
+product silently accepted input R11 forbids. The harness checks that tests exist, run
+and can fail; it cannot check that they were run in the environment where they would
+have failed. Only the matrix does that, and only because someone made CI build two
+interpreters. That is the strongest argument in this repo for keeping the matrix, and
+for widening it rather than trimming it when it gets slow.

@@ -1094,6 +1094,106 @@ class TestAcceptanceCriterion7EndToEndR28R29R30R31:
         assert priced & unpriced == set()
 
 
+class TestMultiModelOrderingR31R47:
+    """R31/R47: ``by_model`` is ordered by key, and no fixture could show it.
+
+    Found by the review's own mutation wave. Dropping the ``sorted()`` from
+    ``_by_model`` — leaving ``list({...})`` over a set of model keys — survived
+    the whole suite, and the reason is the tester's own "collection of one"
+    pattern one level up: **no fixture in the corpus resolves more than one
+    model key**, so the R47 determinism matrix, which is what would otherwise
+    catch a set-iteration dependency, never had a multi-model trace to run on.
+    ``max(len(report.by_model))`` over all 26 fixtures is 1.
+
+    The assertion has to run in a **subprocess with a fixed** ``PYTHONHASHSEED``.
+    In-process it would depend on the seed the test session happens to have, and
+    a test that kills a mutant for some seeds is a test that reports green for
+    the others — which is this project's signature defect with a random number
+    attached.
+    """
+
+    KEYS = (
+        "claude-haiku-4-5",
+        "claude-opus-5",
+        "claude-sonnet-4-5",
+        "claude-sonnet-5",
+        "claude-opus-4-1",
+        "claude-fable-5",
+    )
+
+    def multi_model_file(self, tmp_path: Path) -> Path:
+        """One priced ``model_call`` per snapshot key, in reverse-sorted order."""
+        records: list[dict[str, Any]] = [
+            record(uuid="u-0", message={"content": "go", "role": "user"})
+        ]
+        for index, key in enumerate(sorted(self.KEYS, reverse=True)):
+            records.append(
+                assistant(
+                    f"a-{index}",
+                    f"2026-03-02T09:00:0{index}.000Z",
+                    {
+                        "input_tokens": 100 + index,
+                        "output_tokens": 10,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                    },
+                    f"{key}-20260101",
+                )
+            )
+        return write_jsonl(tmp_path / "multi.jsonl", records)
+
+    @pytest.mark.parametrize("seed", ["0", "1", "2"])
+    def test_r31_by_model_is_ordered_by_key_under_a_fixed_hash_seed(
+        self, tmp_path: Path, seed: str
+    ) -> None:
+        """R31: "per resolved ``model_key`` (ordered by key)", with six of them."""
+        report = tmp_path / f"r{seed}.json"
+        result = run_cli(
+            ["analyze", str(self.multi_model_file(tmp_path)), "--json", str(report)],
+            environment={"PYTHONHASHSEED": seed},
+        )
+        assert result.returncode == EXIT_OK, result.stderr
+        keys = [row["model_key"] for row in json.loads(report.read_text())["cost"]["by_model"]]
+        assert keys == sorted(self.KEYS)
+        assert len(keys) == len(self.KEYS)
+
+    def test_r47_a_multi_model_trace_is_byte_identical_across_hash_seeds(
+        self, tmp_path: Path
+    ) -> None:
+        """R47: the clause the corpus could not exercise — a set that has to be sorted.
+
+        R47 forbids "any ``set``/``dict`` iteration that is not explicitly
+        sorted". With one model key per fixture that clause was unfalsifiable
+        for the cost section; with six it is the whole point.
+        """
+        source = self.multi_model_file(tmp_path)
+        digests = set()
+        for seed in ("0", "1", "2", "random"):
+            report = tmp_path / f"d{seed}.json"
+            result = run_cli(
+                ["analyze", str(source), "--json", str(report)],
+                environment={"PYTHONHASHSEED": seed},
+            )
+            assert result.returncode == EXIT_OK, result.stderr
+            digests.add(sha256_text(report.read_text()))
+        assert len(digests) == 1
+
+    def test_r31_the_six_models_really_do_resolve_and_price(self, tmp_path: Path) -> None:
+        """R31: the premise — six *distinct* priced keys, not one row six times.
+
+        Without this, both tests above are satisfied by a trace whose spans all
+        resolve to one key, which is the state the corpus was already in.
+        """
+        report = tmp_path / "r.json"
+        assert invoke("analyze", str(self.multi_model_file(tmp_path)), "--json", str(report))[
+            0
+        ] == (EXIT_OK)
+        cost = json.loads(report.read_text())["cost"]
+        assert cost["unpriced"] == []
+        assert len({row["model_key"] for row in cost["by_model"]}) == len(self.KEYS)
+        assert Decimal(cost["total"]["cost_usd"]) > 0
+
+
 class TestFailClosedPricingR39:
     """R39/R11: a pricing failure is one sanitized line and exit 2, like any other."""
 
@@ -1472,6 +1572,20 @@ class TestNulInTheOutputPathR39:
         assert code == EXIT_FAIL_CLOSED
         assert out == ""
         assert "Traceback" not in err
+
+    def test_r38_a_path_the_os_cannot_represent_is_not_a_directory(self) -> None:
+        """R38/R11: the interpreter behaviour ``expand_inputs`` relies on.
+
+        ``Path.is_dir()`` swallows ``ValueError`` and answers ``False`` for a
+        path containing a NUL, which is why ``expand_inputs`` needs no guard of
+        its own and the reader's check is the one that fires. Pinned rather than
+        assumed: this is a CPython implementation detail, and if it changes, a
+        NUL input path starts crashing again — this test is where that surfaces,
+        instead of in a traceback on somebody's terminal.
+        """
+        assert Path("/tmp/x\x00y.jsonl").is_dir() is False
+        assert Path("/tmp/x\x00y.jsonl").exists() is False
+        assert cli_main.expand_inputs(["/tmp/x\x00y.jsonl"]) == (Path("/tmp/x\x00y.jsonl"),)
 
     def test_r39_an_ordinary_output_path_is_still_written(self, tmp_path: Path) -> None:
         """R39: the non-vacuous arm — the same invocation without the NUL works."""

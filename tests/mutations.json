@@ -1,5 +1,5 @@
 {
-  "comment": "Increment-3 mutation ledger. Each entry names a module, a unique source substring and its replacement, the wave that introduced it, and the verdict of the last sweep. The set is checked in so the next sweep is a re-run rather than a re-invention, and so a shrinking survivor list is visible in a diff (increment-2 review, mutation-methodology adjudication, amendment 2). Wave 1 (152) was designed before this increment's survivor-killing tests existed. Wave 2 (79) was designed afterwards, deliberately over anchors wave 1 never touched -- a set chosen to be killed is not evidence, a set chosen to reach untouched code is. Wave 2 carries one declared CONTROL ARM (W-M11-CONTROL), a semantic no-op that MUST survive: if the sweep reports it killed, the harness is not reporting verdicts that come from the mutation and every other verdict in that run is worthless. Run with mut/sweep.py in the tester's scratchpad; the oracle is the whole suite with -x, PYTHONDONTWRITEBYTECODE=1, __pycache__ purged around every mutation, and the original text rewritten in the finally. Do not run two sweeps concurrently: the increment-3 tester observed one spurious 'killed' (W-J01, 3.12) from CPU contention against the suite's performance pins, which UNDER-reports survivors.",
+  "comment": "Increment-3 mutation ledger. Each entry names a module, a unique source substring and its replacement, the wave that introduced it, and the verdict of the last sweep. The set is checked in so the next sweep is a re-run rather than a re-invention, and so a shrinking survivor list is visible in a diff (increment-2 review, mutation-methodology adjudication, amendment 2). Wave 1 (152) was designed before this increment's survivor-killing tests existed. Wave 2 (79) was designed afterwards, deliberately over anchors wave 1 never touched -- a set chosen to be killed is not evidence, a set chosen to reach untouched code is. Wave 2 carries one declared CONTROL ARM (W-M11-CONTROL), a semantic no-op that MUST survive: if the sweep reports it killed, the harness is not reporting verdicts that come from the mutation and every other verdict in that run is worthless. Run with mut/sweep.py in the tester's scratchpad; the oracle is the whole suite with -x, PYTHONDONTWRITEBYTECODE=1, __pycache__ purged around every mutation, and the original text rewritten in the finally. Do not run two sweeps concurrently: the increment-3 tester observed one spurious 'killed' (W-J01, 3.12) from CPU contention against the suite's performance pins, which UNDER-reports survivors. WAVE 3 (increment-3 review, 59 mutants): designed over anchors NEITHER prior wave touched -- cost/source.py's snapshot validators, detect/base.py's Finding validators and helpers, detect/registry.py's waste mapping, report/json_out.py's timestamp and identifier boundary, and every line the review's own fix commits added. 54 killed, 5 survived: 2 equivalent, 3 real gaps now closed. Two of the three real gaps were in code the review itself had just written, which is the argument for sweeping a fix and not only the thing it fixed. HARNESS: also verify a tree digest between mutants -- a sweep killed mid-mutation leaves a mutated baseline and the next run reports against it. A mutation whose subject was deleted carries retired: true and is skipped by a sweep; it stays in the file because the finding is the point, not the anchor.",
   "operators": [
     "relational-flip: < <-> <=, > <-> >=, == <-> !=",
     "integer-constant +/- 1",
@@ -434,7 +434,7 @@
       "old": "@lru_cache(maxsize=1)\ndef bundled_snapshot",
       "new": "@lru_cache(maxsize=2)\ndef bundled_snapshot",
       "verdict": "SURVIVED",
-      "why_it_survives": "EQUIVALENT: bundled_snapshot is nullary, so lru_cache maxsize 1 and 2 hold the same single entry. No test can distinguish them."
+      "why_it_survives": "EQUIVALENT -- upheld by the increment-3 review. bundled_snapshot is nullary, so maxsize 1 and 2 hold the same single entry and no behaviour can differ. Refinement: it is not undetectable, only untested -- `cache_info().maxsize` is public and would distinguish them. Pinning it would pin an implementation detail with no behavioural content, so the premise test (nullary signature, currsize stays 1) is the right mitigation and this stays a declared equivalent."
     },
     {
       "id": "S12",
@@ -983,7 +983,8 @@
       "operator": "negation",
       "old": "        if path.is_dir():\n            expanded.extend",
       "new": "        if not path.is_dir():\n            expanded.extend",
-      "verdict": "killed"
+      "verdict": "killed",
+      "reanchored": "increment-3 review: re-anchored twice. The BUG-7 fix wrapped this call in a try/except; the review's own wave 3 then found that clause was dead and deleted it, so the anchor is back to its wave-1 text."
     },
     {
       "id": "M11",
@@ -1053,9 +1054,10 @@
       "wave": 1,
       "module": "swarm_observer/cli/main.py",
       "operator": "literal",
-      "old": "    paths = \", \".join(path.as_posix() for path in written)",
+      "old": "    paths = \", \".join(_one_line_safe(path.as_posix()).replace(\"\\n\", \" \") for path in written)",
       "new": "    paths = \", \".join(str(path.resolve()) for path in written)",
-      "verdict": "killed"
+      "verdict": "killed",
+      "reanchored": "increment-3 review: the fix commits moved this anchor; the mutation is the same decision on the new text"
     },
     {
       "id": "M19",
@@ -1530,9 +1532,10 @@
       "wave": 2,
       "module": "swarm_observer/report/json_out.py",
       "operator": "call-argument",
-      "old": "{\"code\": warning.code, \"count\": warning.count, \"detail\": warning.detail}",
-      "new": "{\"code\": warning.code, \"count\": 1, \"detail\": warning.detail}",
-      "verdict": "killed"
+      "old": "                \"count\": warning.count,",
+      "new": "                \"count\": 1,",
+      "verdict": "killed",
+      "reanchored": "increment-3 review: the fix commits moved this anchor; the mutation is the same decision on the new text"
     },
     {
       "id": "W-J16",
@@ -1640,8 +1643,8 @@
       "operator": "guard-drop",
       "old": "        _detector_of(finding_id)  # fail loudly on a key that is not a finding id",
       "new": "        pass  # fail loudly on a key that is not a finding id",
-      "verdict": "SURVIVED",
-      "why_it_survives": "EQUIVALENT: _by_detector calls _detector_of on every key anyway, raising the same ValueError with the same message. Verified empirically, not argued."
+      "verdict": "killed",
+      "why_it_survives": "RECLASSIFIED by the increment-3 review: NOT equivalent. The claim was that `_by_detector` calls `_detector_of` on every key anyway -- true for every input the sweep tried, false in general. The up-front loop runs BEFORE any span is priced and `_by_detector` runs after, so a trace that raises during pricing reports a different error: shipped raises ValueError('is not a finding id'), the mutant raises CostError('cost_precision_exceeded'). Two different R11 lines from one input. Killed by test_cost_engine.py::TestWaveTwoGapsR30R31::test_r15_a_malformed_waste_key_is_refused_before_any_span_is_priced."
     },
     {
       "id": "W-C12",
@@ -1750,7 +1753,7 @@
       "old": "        expanded.append(path)",
       "new": "        expanded.append(Path(path))",
       "verdict": "SURVIVED",
-      "why_it_survives": "CONTROL ARM: a deliberate no-op (Path(path) on a value that is already a Path). It MUST survive; a 'killed' verdict here means the harness is not reporting the mutation."
+      "why_it_survives": "CONTROL ARM -- upheld by the increment-3 review, and reproduced on a clean tree: `Path(path)` where `path` is already a Path yields an equal PosixPath, nothing in the package compares these by identity, and the line is executed on every run. It MUST survive; a 'killed' verdict here means the harness is not reporting the mutation. Caveat recorded by the reviewer: a control arm only warrants the sweep if the harness ALSO verifies the tree is restored between mutants -- the reviewer's first run was killed mid-mutation and left a mutated baseline, exactly the hazard the increment-2 review recorded. Add a tree digest check around every mutant."
     },
     {
       "id": "W-M12",
@@ -2110,6 +2113,543 @@
       "operator": "relational",
       "old": "        if merged and start < merged[-1][1]:",
       "new": "        if merged and start <= merged[-1][1]:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-S01",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "normalization-drop",
+      "old": "        if list(self.models) != sorted(self.models):",
+      "new": "        if list(self.models) != list(self.models):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-S02",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "relational",
+      "old": "        if len(set(self.models)) != len(self.models):",
+      "new": "        if len(set(self.models)) < len(self.models):",
+      "verdict": "SURVIVED",
+      "why_it_survives": "EQUIVALENT by construction: a set built from a list is never larger than it, so `len(set(x)) != len(x)` and `len(set(x)) < len(x)` are the same predicate. The reviewer's own operator choice; recorded rather than removed, because a ledger that only keeps the mutants that worked is a ledger chosen to look good."
+    },
+    {
+      "id": "R-S03",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "early-return",
+      "old": "        for source in self.sources:\n            if model_key in source.models:\n                return source\n        return None",
+      "new": "        for source in self.sources:\n            if model_key in source.models:\n                return source\n        return self.sources[0] if self.sources else None",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-S04",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "membership",
+      "old": "            if target not in self.models:",
+      "new": "            if target in self.models:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-S05",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "guard-drop",
+      "old": "                if key in claimed:\n                    raise ValueError(f\"model {key!r} is claimed by two sources\")",
+      "new": "                if False:\n                    raise ValueError(f\"model {key!r} is claimed by two sources\")",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-S06",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "set-operand-swap",
+      "old": "        unattributed = sorted(set(self.models) - set(claimed))",
+      "new": "        unattributed = sorted(set(claimed) - set(self.models))",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-S07",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "set-operand-swap",
+      "old": "        stray = sorted(set(claimed) - set(self.models))",
+      "new": "        stray = sorted(set(self.models) - set(claimed))",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-S08",
+      "wave": 3,
+      "module": "swarm_observer/cost/source.py",
+      "operator": "negation",
+      "old": "        if rate is not None:\n            found[price_key] = rate",
+      "new": "        if rate is None:\n            found[price_key] = rate",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B01",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "normalization-drop",
+      "old": "        if list(self.span_seqs) != sorted(self.span_seqs):",
+      "new": "        if list(self.span_seqs) != list(self.span_seqs):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B02",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "relational",
+      "old": "        if len(self.span_seqs) > MAX_EVIDENCE_SPANS:",
+      "new": "        if len(self.span_seqs) >= MAX_EVIDENCE_SPANS:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B03",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "relational",
+      "old": "        if any(seq < 0 for seq in self.span_seqs):",
+      "new": "        if any(seq <= 0 for seq in self.span_seqs):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B04",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "quantifier",
+      "old": "        if any(seq < 0 for seq in self.span_seqs):",
+      "new": "        if all(seq < 0 for seq in self.span_seqs):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B05",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "relational",
+      "old": "        if len(self.previews) > MAX_PREVIEWS:",
+      "new": "        if len(self.previews) >= MAX_PREVIEWS:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B06",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "literal",
+      "old": "        if self.finding_id.split(\":\", 1)[0] != self.detector:",
+      "new": "        if self.finding_id.split(\":\", 1)[-1] != self.detector:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B07",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "boolean-connective",
+      "old": "        if span.kind != \"model_call\" or span.usage is None:",
+      "new": "        if span.kind != \"model_call\" and span.usage is None:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B08",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "boundary",
+      "old": "        if seq < 0 or seq >= len(trace.spans):",
+      "new": "        if seq < 0 or seq > len(trace.spans):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B09",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "normalization-drop",
+      "old": "    for seq in sorted(set(seqs)):",
+      "new": "    for seq in sorted(seqs):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B10",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "boundary",
+      "old": "            if not 0 <= seq < len(trace.spans):",
+      "new": "            if not 0 < seq < len(trace.spans):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B11",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "relational",
+      "old": "            if span.agent_id == agent.agent_id:",
+      "new": "            if span.agent_id != agent.agent_id:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B12",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "container-default",
+      "old": "        found.setdefault(span.parent_span_id, span)",
+      "new": "        found[span.parent_span_id] = span",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B13",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "literal",
+      "old": "    return max(0, millis_between(span.start, span.end))",
+      "new": "    return min(0, millis_between(span.start, span.end))",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-B14",
+      "wave": 3,
+      "module": "swarm_observer/detect/base.py",
+      "operator": "int-1",
+      "old": "    return ordered[(len(ordered) - 1) // 2]",
+      "new": "    return ordered[(len(ordered) - 2) // 2]",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-R01",
+      "wave": 3,
+      "module": "swarm_observer/detect/registry.py",
+      "operator": "control-flow",
+      "old": "                waste[finding.finding_id] = seqs\n            continue",
+      "new": "                waste[finding.finding_id] = seqs\n            pass",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-R02",
+      "wave": 3,
+      "module": "swarm_observer/detect/registry.py",
+      "operator": "container-default",
+      "old": "            waste[finding.finding_id] = ()",
+      "new": "            waste.setdefault(finding.finding_id, ())",
+      "verdict": "SURVIVED",
+      "why_it_survives": "EQUIVALENT in practice, NOT proven: `waste[fid] = ()` vs `setdefault` differ only when one non-attributing detector produces two findings with the same finding_id, which R15 makes possible only for two findings with identical detector, metrics and spans -- i.e. genuine duplicates no detector emits. Left `open` rather than `equivalent`: the distinguishing input is a detector this repository does not contain, and the increment-2 ruling is that an equivalence claim states the input space it was checked over."
+    },
+    {
+      "id": "R-R03",
+      "wave": 3,
+      "module": "swarm_observer/detect/registry.py",
+      "operator": "normalization-drop",
+      "old": "    return DetectorRun(findings=sort_findings(findings), waste_seqs=waste)",
+      "new": "    return DetectorRun(findings=tuple(findings), waste_seqs=waste)",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-N01",
+      "wave": 3,
+      "module": "swarm_observer/cost/snapshot.py",
+      "operator": "negation",
+      "old": "    if not isinstance(payload, dict):",
+      "new": "    if isinstance(payload, dict):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-N02",
+      "wave": 3,
+      "module": "swarm_observer/cost/snapshot.py",
+      "operator": "literal",
+      "old": "        raise RateSnapshotError(\"rate_snapshot_unreadable\", note=\"not valid JSON\") from None",
+      "new": "        raise RateSnapshotError(\"rate_snapshot_invalid\", note=\"not valid JSON\") from None",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M01",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "negation",
+      "old": "    if \"\\x00\" in raw:",
+      "new": "    if \"\\x00\" not in raw:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M02",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "boolean-connective",
+      "old": "    if path.exists() and not path.is_file():",
+      "new": "    if path.exists() or not path.is_file():",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M03",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "guard-drop",
+      "old": "    if path.exists() and not path.is_file():",
+      "new": "    if path.exists() and False:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M04",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "literal",
+      "old": "        err.write(f\"{PROGRAM}: {_UNEXPECTED_CODE}: {_one_line_safe(type(exc).__name__)}\\n\")",
+      "new": "        err.write(f\"{PROGRAM}: {_UNEXPECTED_CODE}: {_one_line_safe(str(exc))}\\n\")",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M05",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "literal",
+      "old": "        return EXIT_FAIL_CLOSED\n\n\nif __name__ == \"__main__\":",
+      "new": "        return EXIT_USAGE\n\n\nif __name__ == \"__main__\":",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M06",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "normalization-drop",
+      "old": "    paths = \", \".join(_one_line_safe(path.as_posix()).replace(\"\\n\", \" \") for path in written)",
+      "new": "    paths = \", \".join(path.as_posix() for path in written)",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M07",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "exception-widen",
+      "old": "        except (OSError, ValueError):",
+      "new": "        except OSError:",
+      "verdict": "retired",
+      "why_it_survives": "RETIRED, not killed. This mutant narrowed `except (OSError, ValueError)` to `except OSError` in cli/main.expand_inputs. It survived because the clause was DEAD CODE -- `Path.is_dir()` swallows ValueError and answers False, so nothing could reach it. The reviewer had written that clause inside the fix for BUG-7: a guard structurally unable to fire, in the fix for a class of guards structurally unable to fire. The clause is deleted, so the anchor no longer exists and the mutant has no subject. Retained as the record of the finding. test_r38_a_path_the_os_cannot_represent_is_not_a_directory pins the interpreter behaviour the deletion relies on. Sweeps skip entries with retired: true.",
+      "retired": true
+    },
+    {
+      "id": "R-M08",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "normalization-drop",
+      "old": "            expanded.extend(sorted(path.glob(f\"*{JSONL_SUFFIX}\"), key=lambda child: child.name))",
+      "new": "            expanded.extend(path.glob(f\"*{JSONL_SUFFIX}\"))",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M09",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "relational",
+      "old": "    if any(SEVERITY_RANK[finding.severity] >= threshold for finding in findings):",
+      "new": "    if any(SEVERITY_RANK[finding.severity] > threshold for finding in findings):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-M10",
+      "wave": 3,
+      "module": "swarm_observer/cli/main.py",
+      "operator": "membership",
+      "old": "    unknown = sorted({slug for slug in selected if slug not in DETECTOR_SLUGS})",
+      "new": "    unknown = sorted({slug for slug in selected if slug in DETECTOR_SLUGS})",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-I01",
+      "wave": 3,
+      "module": "swarm_observer/ingest/reader.py",
+      "operator": "negation",
+      "old": "        if \"\\x00\" in str(path):",
+      "new": "        if \"\\x00\" not in str(path):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-C01",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "guard-scope",
+      "old": "        return quantize_cost(exact)\n    except DecimalException:",
+      "new": "        pass\n    except DecimalException:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-C02",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "container-swap",
+      "old": "                wasted=sum_usage(_usage_at(trace, seq) for seq in ordered),",
+      "new": "                wasted=sum_usage(_usage_at(trace, seq) for seq in ordered if seq in cost_by_seq),",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-C03",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "membership",
+      "old": "                    _usage_at(trace, seq) for seq in ordered if seq not in cost_by_seq",
+      "new": "                    _usage_at(trace, seq) for seq in ordered if seq in cost_by_seq",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-C04",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "normalization-drop",
+      "old": "    return tuple(sorted(absent))",
+      "new": "    return tuple(absent)",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-C05",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "boolean-connective",
+      "old": "        if tokens != 0 and price_key not in rates:",
+      "new": "        if tokens != 0 or price_key not in rates:",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-C06",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "quantifier",
+      "old": "        if any(seq not in cost_by_seq for seq in relevant):\n            found[finding_id] = None",
+      "new": "        if all(seq not in cost_by_seq for seq in relevant):\n            found[finding_id] = None",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-C07",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "normalization-drop",
+      "old": "    keys = sorted({item.model_key for item in priced})",
+      "new": "    keys = list({item.model_key for item in priced})",
+      "verdict": "SURVIVED",
+      "why_it_survives": "REAL, and fixed: dropping `sorted()` from `_by_model` was invisible because NO FIXTURE IN THE CORPUS RESOLVES MORE THAN ONE MODEL KEY, so R47's determinism matrix -- the check that exists to catch a set-iteration dependency -- had no multi-model trace to run on. `TestMultiModelOrderingR31R47` builds one with six keys and asserts under fixed PYTHONHASHSEEDs in subprocesses. Now KILLED."
+    },
+    {
+      "id": "R-C08",
+      "wave": 3,
+      "module": "swarm_observer/cost/compute.py",
+      "operator": "int-1",
+      "old": "    order += [(len(index_of) + offset, agent_id) for offset, agent_id in enumerate(undeclared)]",
+      "new": "    order += [(len(index_of) - offset, agent_id) for offset, agent_id in enumerate(undeclared)]",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J01",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "guard-drop",
+      "old": "    return redact(value)\n\n\ndef usage_document",
+      "new": "    return value\n\n\ndef usage_document",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J02",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "call-argument",
+      "old": "        \"agent_id\": identifier(span.agent_id),",
+      "new": "        \"agent_id\": span.agent_id,",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J03",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "call-argument",
+      "old": "        \"agent_ids\": [identifier(agent_id) for agent_id in finding.agent_ids],",
+      "new": "        \"agent_ids\": list(finding.agent_ids),",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J04",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "call-argument",
+      "old": "                    \"name\": identifier(source.name),",
+      "new": "                    \"name\": source.name,",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J05",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "call-argument",
+      "old": "                \"detail\": identifier(warning.detail),",
+      "new": "                \"detail\": warning.detail,",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J06",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "relational",
+      "old": "            if candidate is not None and (latest is None or candidate > latest):",
+      "new": "            if candidate is not None and (latest is None or candidate < latest):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J07",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "int-1",
+      "old": "        f\".{value.microsecond // 1000:03d}Z\"",
+      "new": "        f\".{value.microsecond // 100:03d}Z\"",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J08",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "container-default",
+      "old": "    counts = dict.fromkeys(SEVERITIES, 0)",
+      "new": "    counts = dict.fromkeys(SEVERITIES, 1)",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-J09",
+      "wave": 3,
+      "module": "swarm_observer/report/json_out.py",
+      "operator": "call-argument",
+      "old": "                \"wasted_unpriced\": usage_document(row.wasted_unpriced),",
+      "new": "                \"wasted_unpriced\": usage_document(row.wasted),",
+      "verdict": "SURVIVED",
+      "why_it_survives": "REAL, and fixed: `cost_document` rendering `wasted_unpriced` from `row.wasted` survived, because BUG-4's decomposition was asserted on the `DetectorWaste` model and never on the JSON a reader receives. `TestByDetectorDocumentR31` asserts the rendered row. Now KILLED."
+    },
+    {
+      "id": "R-D01",
+      "wave": 3,
+      "module": "swarm_observer/report/redact.py",
+      "operator": "guard-drop",
+      "old": "    if rest[separator + 1 :].lstrip().startswith(marker(NAME_PRESERVING_LABEL)):\n        return whole",
+      "new": "    if False:\n        return whole",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-D02",
+      "wave": 3,
+      "module": "swarm_observer/report/redact.py",
+      "operator": "literal",
+      "old": "    if rest[separator + 1 :].lstrip().startswith(marker(NAME_PRESERVING_LABEL)):",
+      "new": "    if rest[separator + 1 :].lstrip().endswith(marker(NAME_PRESERVING_LABEL)):",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-D03",
+      "wave": 3,
+      "module": "swarm_observer/report/redact.py",
+      "operator": "int-1",
+      "old": "    kept = rest[: separator + 1]",
+      "new": "    kept = rest[:separator]",
+      "verdict": "killed"
+    },
+    {
+      "id": "R-D04",
+      "wave": 3,
+      "module": "swarm_observer/report/redact.py",
+      "operator": "literal",
+      "old": "    return f\"[redacted:{label}]\"",
+      "new": "    return f\"[redacted: {label}]\"",
       "verdict": "killed"
     }
   ],

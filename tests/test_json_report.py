@@ -650,6 +650,88 @@ class TestRedactionAtTheBoundaryR33:
         assert "PRIVATE KEY" not in render_of(load_trace(path), previews=False)
 
 
+class TestByDetectorDocumentR31:
+    """R31: the per-detector waste row as it is *rendered*, not as it is computed.
+
+    Added by the review's own mutation wave, which found that swapping
+    ``wasted_unpriced``'s source field for ``wasted`` in ``cost_document``
+    survived the whole suite: the decomposition was asserted on the
+    ``DetectorWaste`` model and never on the JSON the reader actually gets. The
+    renderer is a separate opportunity to get it wrong and needs its own arm.
+    """
+
+    def waste_document(self) -> dict[str, Any]:
+        """A trace with one attributed priced call and one attributed unpriceable one."""
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=2_000))
+        builder.model_call(model="nowhere-at-all", usage=TokenUsage(input_tokens=4_000))
+        trace = builder.build()
+        cost = compute_costs(trace, SHIPPED, waste_seqs={"agent_loop:aaaaaaaaaaaa": (0, 1)})
+        return json.loads(
+            render_json(
+                trace=trace,
+                findings=(),
+                cost=cost,
+                tool_version=__version__,
+                options=RenderOptions(),
+            )
+        )["cost"]["by_detector"][0]
+
+    def test_r31_the_rendered_row_carries_all_three_numbers_distinctly(self) -> None:
+        """R17/R31: ``wasted``, ``wasted_unpriced`` and the cost are three values.
+
+        Each asserted against its own literal. Asserting only that the keys
+        exist, or that ``wasted`` is right, is what let the renderer read the
+        wrong field for a whole increment.
+        """
+        row = self.waste_document()
+        assert row["wasted"]["input_tokens"] == 6_000
+        assert row["wasted_unpriced"]["input_tokens"] == 4_000
+        assert row["wasted"] != row["wasted_unpriced"]
+        assert row["findings_with_unknown_cost"] == 1
+        # The dollar figure prices the *priced* 2,000 tokens only, computed from
+        # the snapshot rather than pasted: 2,000 x claude-haiku-4-5's input rate,
+        # per million. If it ever equals the cost of 6,000 tokens, the renderer
+        # has started pricing tokens that have no rate.
+        rate = SHIPPED.get_rate("claude-haiku-4-5", "input")
+        assert rate is not None
+        assert row["wasted_cost_usd"] == format_usd(Decimal(2_000) * rate / Decimal(1_000_000))
+        assert row["wasted_cost_usd"] != format_usd(Decimal(6_000) * rate / Decimal(1_000_000))
+
+    def test_r31_the_rendered_row_decomposes(self) -> None:
+        """R17/R31: priced tokens are ``wasted`` minus ``wasted_unpriced``."""
+        row = self.waste_document()
+        for field in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_5m_tokens",
+            "cache_creation_1h_tokens",
+        ):
+            assert row["wasted"][field] >= row["wasted_unpriced"][field], field
+        assert row["wasted"]["input_tokens"] - row["wasted_unpriced"]["input_tokens"] == 2_000
+
+    def test_r31_a_fully_priced_rendered_row_reports_zero_unpriced(self) -> None:
+        """R31: the arm that stops ``wasted_unpriced`` echoing ``wasted``."""
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=2_000))
+        trace = builder.build()
+        cost = compute_costs(trace, SHIPPED, waste_seqs={"agent_loop:aaaaaaaaaaaa": (0,)})
+        document = json.loads(
+            render_json(
+                trace=trace,
+                findings=(),
+                cost=cost,
+                tool_version=__version__,
+                options=RenderOptions(),
+            )
+        )
+        row = document["cost"]["by_detector"][0]
+        assert row["wasted"]["input_tokens"] == 2_000
+        assert row["wasted_unpriced"]["total_tokens"] == 0
+        assert Decimal(row["wasted_cost_usd"]) > 0
+
+
 class TestNoPreviewsGuardR38:
     """R38: ``--no-previews`` omits trace free text entirely — the A-c6 guard.
 

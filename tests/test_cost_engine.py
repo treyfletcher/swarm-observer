@@ -1324,19 +1324,48 @@ class TestWaveTwoGapsR30R31:
         does not exist.
 
         Mutant W-C11 — deleting ``compute_costs``'s own up-front validation
-        loop — **survives this test, and is an equivalent mutant.** Verified
-        rather than assumed: with the loop gone, every key in this
-        parametrization still raises the same ``ValueError`` with the same
-        message, because ``_by_detector`` calls ``_detector_of`` on every key
-        anyway. The up-front loop is fail-fast readability, not a behavioural
-        guarantee, and its comment ("fail loudly on a key that is not a finding
-        id") describes something the code would do without it. Recorded in the
-        test report as a survivor with a reason rather than papered over.
+        loop — survives *this* test, and the test report classified it
+        equivalent on that basis. It is **not** equivalent; see the test below,
+        which kills it.
         """
         builder = TraceBuilder()
         builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
         with pytest.raises(ValueError):
             compute_costs(builder.build(), SHIPPED, waste_seqs={bad_key: (0,)})
+
+    def test_r15_a_malformed_waste_key_is_refused_before_any_span_is_priced(self) -> None:
+        """R15/R29: the up-front validation loop is fail-fast, and that is its content.
+
+        Added by review, and it kills mutant **W-C11**, which the test report
+        classified as equivalent. The claim was that deleting
+        ``compute_costs``'s up-front loop changes nothing because
+        ``_by_detector`` calls ``_detector_of`` on every key anyway — true for
+        every input the report tried, and false in general. The loop runs
+        *before* any span is priced; ``_by_detector`` runs after. So a trace that
+        raises during pricing changes which error a caller sees:
+
+        * shipped — ``ValueError('… is not a finding id')``, the programming
+          error, because the malformed key is caught first;
+        * mutant  — ``CostError('cost_precision_exceeded')``, because the whole
+          trace is priced before the key is ever looked at.
+
+        Two different exit lines (R11) from one input. The methodology point is
+        the increment-2 review's own ruling in miniature: an equivalence claim
+        is only as strong as the input space it was checked over, and this one
+        was checked over inputs that could not distinguish the two.
+        """
+        builder = TraceBuilder()
+        builder.model_call(
+            model="claude-haiku-4-5", usage=TokenUsage(input_tokens=10**COST_PRECISION)
+        )
+        trace = builder.build()
+        # The premise: on its own, this trace is a CostError.
+        with pytest.raises(CostError):
+            compute_costs(trace, SHIPPED)
+        # With a malformed waste key it is a ValueError instead, because the
+        # key is checked before a single span is priced.
+        with pytest.raises(ValueError, match="is not a finding id"):
+            compute_costs(trace, SHIPPED, waste_seqs={"NOT A FINDING ID": (0,)})
 
     def test_r15_a_well_formed_waste_key_is_accepted(self) -> None:
         """R15: the arm that keeps the test above from being satisfied by

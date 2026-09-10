@@ -242,19 +242,25 @@ def expand_inputs(raw: Sequence[str]) -> tuple[Path, ...]:
     through to the reader rather than filtered out here, so a subdirectory
     called ``agent-3.jsonl`` is a fail-closed exit 2 and not a file silently
     missing from a report.
+
+    No guard here for a path the OS cannot represent. ``Path.is_dir()`` answers
+    ``False`` for one rather than raising (it swallows ``ValueError``
+    internally), so BUG-7's NUL reaches
+    :func:`~swarm_observer.ingest.reader.resolve_inputs`, which owns "this input
+    cannot be read" and answers with R11's sanitized exit 2. A ``try`` around
+    this call was written during the review's own BUG-7 fix and then **deleted**
+    when the review's mutation wave found it: the whole suite passed with the
+    clause removed, because nothing could reach it. A guard structurally unable
+    to fire is the defect this project keeps shipping, and adding one while
+    fixing an instance of it would have been the joke writing itself.
+    ``test_r38_a_path_the_os_cannot_represent_is_not_a_directory`` pins the
+    interpreter behaviour this relies on, so a Python that starts raising here
+    goes red rather than silently reinstating the crash.
     """
     expanded: list[Path] = []
     for item in raw:
         path = Path(item)
-        try:
-            is_directory = path.is_dir()
-        except (OSError, ValueError):
-            # A path the OS cannot even be asked about — an embedded NUL makes
-            # `os.stat` raise a bare `ValueError` (review, BUG-7). It is not a
-            # directory, so it goes to the reader, which owns "this input cannot
-            # be read" and answers with R11's sanitized exit 2.
-            is_directory = False
-        if is_directory:
+        if path.is_dir():
             expanded.extend(sorted(path.glob(f"*{JSONL_SUFFIX}"), key=lambda child: child.name))
             continue
         expanded.append(path)

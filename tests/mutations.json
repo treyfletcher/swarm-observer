@@ -1,0 +1,33 @@
+{
+  "comment": "Increment-3 mutation ledger. Each entry names a module, a unique source substring and its replacement. The set is checked in so the next sweep is a re-run rather than a re-invention, and so a shrinking survivor list is visible in a diff (increment-2 review, mutation-methodology adjudication, amendment 2). Operators are declared in operators[]. Modules covered are every module this increment touched, with a per-module floor of 8 (amendment 1). Run with tools/mutation_sweep.py in the tester's scratchpad; the oracle is the whole suite with -x, PYTHONDONTWRITEBYTECODE=1 and a git checkout in the finally.",
+  "operators": [
+    "relational-flip: < <-> <=, > <-> >=, == <-> !=",
+    "integer-constant +/- 1",
+    "boolean-connective swap: and <-> or",
+    "guard-clause drop: `if X and Y` -> `if X`; `if X` -> `if False`",
+    "negation drop or insertion: `not X` -> `X`, `is None` -> `is not None`",
+    "membership flip: `in` -> `not in`",
+    "slice / range bound off-by-one",
+    "sort- and group-key component drop",
+    "normalization drop: sorted(), set(), tuple(), dict()",
+    "rung / branch reorder (R27 ladder, R30 priority order)",
+    "call-argument swap",
+    "literal substitution (string constants, rounding modes, quanta)",
+    "control-flow swap: continue <-> break, early return removal",
+    "container-default swap: `or 0` -> `and 0`, default value change"
+  ],
+  "modules": {
+    "swarm_observer/cost/compute.py": 34,
+    "swarm_observer/cost/snapshot.py": 12,
+    "swarm_observer/cost/source.py": 18,
+    "swarm_observer/report/json_out.py": 22,
+    "swarm_observer/report/redact.py": 10,
+    "swarm_observer/cli/main.py": 24,
+    "swarm_observer/detect/registry.py": 8,
+    "swarm_observer/detect/base.py": 12,
+    "swarm_observer/detect/repeated_tool_call.py": 4,
+    "swarm_observer/detect/agent_loop.py": 4,
+    "swarm_observer/detect/retry_storm.py": 4
+  },
+  "mutations": []
+}

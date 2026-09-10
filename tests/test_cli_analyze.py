@@ -581,6 +581,47 @@ class TestExitCodesR39:
         assert code == EXIT_USAGE
         assert "size limit must be a positive integer" in err
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "BUG-5: check_output_path rejects only a directory, and atomic_write_texts "
+            "renames over its destination, so naming a FIFO, socket or device node "
+            "destroys it and the run reports success. `--json /dev/null` — a natural way "
+            "to ask for the exit code alone — replaces /dev/null with a regular file."
+        ),
+    )
+    def test_r39_an_output_path_that_is_not_a_regular_file_is_refused(self, tmp_path: Path) -> None:
+        """R11/R39: the reader refuses a non-regular *input*; the writer must match.
+
+        R11's posture is that a failure leaves the filesystem as it found it. An
+        output path that is not a regular file cannot be atomically replaced
+        without destroying what is there, so it belongs with the directory case
+        in ``check_output_path`` — exit 3, nothing written.
+        """
+        target = tmp_path / "pipe"
+        os.mkfifo(target)
+        code, _, _ = invoke("analyze", str(CLEAN), "--json", str(target))
+        assert code == EXIT_USAGE
+        assert target.is_fifo()
+
+    def test_r39_bug5_reproduces_as_a_destroyed_fifo(self, tmp_path: Path) -> None:
+        """R11: BUG-5 pinned as it behaves today, beside its xfail.
+
+        A FIFO rather than a character device on purpose: reproducing this
+        against ``/dev/null`` destroys ``/dev/null`` for the whole machine, which
+        is how it was found.
+        """
+        target = tmp_path / "pipe"
+        os.mkfifo(target)
+        assert target.is_fifo()
+        code, out, _ = invoke("analyze", str(CLEAN), "--json", str(target))
+        assert code == EXIT_OK
+        assert out.startswith("wrote ")
+        assert not target.is_fifo(), (
+            "BUG-5 appears to be fixed: delete this test and de-xfail the one above"
+        )
+        assert target.is_file()
+
     def test_r39_a_negative_blocked_gap_is_a_usage_error(self, tmp_path: Path) -> None:
         """R25/R39: the one tunable, validated at the boundary."""
         code, _, err = invoke(
@@ -673,9 +714,15 @@ class TestStdoutDisciplineR40:
             assert out == ""
             assert err
 
-    def test_r40_stdout_is_identical_across_the_environment_matrix(self) -> None:
-        """R40: hash seed, timezone and locale, in real subprocesses."""
-        with_json = ["analyze", str(DUPLICATE), "--json", os.devnull]
+    def test_r40_stdout_is_identical_across_the_environment_matrix(self, tmp_path: Path) -> None:
+        """R40: hash seed, timezone and locale, in real subprocesses.
+
+        The report goes to a temporary file rather than to ``os.devnull``. That
+        looked like the tidy choice and is not: ``atomic_write_texts`` renames
+        over its destination, so naming a character device destroys it — see
+        BUG-5, which this test found by doing it.
+        """
+        with_json = ["analyze", str(DUPLICATE), "--json", str(tmp_path / "r.json")]
         digests = set()
         for environment in (*DETERMINISM_ENVIRONMENTS, {}):
             result = run_cli(with_json, environment=environment)

@@ -26,7 +26,7 @@ character produces a plausible wrong number rather than a failure:
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException
 from fractions import Fraction
 from pathlib import Path
 
@@ -434,15 +434,6 @@ class TestInexactTrapR29:
         assert caught.value.seq == 1
         assert caught.value.detail == "span 1"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-1: quantize_cost runs outside price_usage's DecimalException guard, so a "
-            "token count whose *quantized* result exceeds COST_PRECISION digits raises a raw "
-            "decimal.InvalidOperation instead of CostError. It escapes cli.main, printing a "
-            "traceback and exiting 1 (R11, R39)."
-        ),
-    )
     def test_r29_an_oversized_but_exact_token_count_is_a_cost_error_not_a_crash(self) -> None:
         """R29/R11: every pricing failure is ``CostError``, never a bare Decimal signal.
 
@@ -454,18 +445,53 @@ class TestInexactTrapR29:
         with pytest.raises(CostError):
             price_usage(TokenUsage(input_tokens=10**60), {"input": Decimal("3")})
 
-    def test_r29_bug1_reproduces_as_a_raw_decimal_signal_today(self) -> None:
-        """R29: the defect above, pinned as it currently behaves.
+    def test_r29_no_bare_decimal_signal_escapes_price_usage(self) -> None:
+        """R29 (BUG-1, fixed in review): every step reports the typed error.
 
-        Kept beside the xfail so the bug report has a live reproduction and so
-        the fix has to move *both* — a fix that turns the raw signal into a
-        different bare exception would still fail here.
+        Replaces the reproduction that pinned the raw ``InvalidOperation``. The
+        assertion is deliberately about the *type that must not appear* rather
+        than about ``CostError`` alone: the defect was a bare ``decimal`` signal
+        crossing a module boundary, and a fix that swapped it for a different
+        bare exception would have satisfied "raises something".
         """
-        with pytest.raises((CostError, InvalidOperation)) as caught:
+        with pytest.raises(Exception) as caught:
             price_usage(TokenUsage(input_tokens=10**60), {"input": Decimal("3")})
-        assert isinstance(caught.value, InvalidOperation), (
-            "BUG-1 appears to be fixed: delete this test and de-xfail the one above"
-        )
+        assert isinstance(caught.value, CostError)
+        assert not isinstance(caught.value, DecimalException)
+
+    @pytest.mark.parametrize("tokens", [10**60, 10**60 + 1, 7 * 10**61])
+    def test_r29_the_quantize_is_inside_the_guard_for_every_component(self, tokens: int) -> None:
+        """R29: the guard is a property of the function, not of one component.
+
+        BUG-1 reached the quantize through ``input_tokens`` only because that is
+        the component the reproduction used. Each of the five is driven alone
+        here, so a future guard that is reinstated for one term and not the rest
+        fails rather than passing on the one path a test happened to take.
+        """
+        for field in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_5m_tokens",
+            "cache_creation_1h_tokens",
+        ):
+            usage = TokenUsage(**{field: tokens})
+            with pytest.raises(CostError) as caught:
+                price_usage(usage, dict.fromkeys(PRICE_KEYS, Decimal("3")))
+            assert caught.value.code == "cost_precision_exceeded"
+
+    def test_r29_the_oversize_boundary_still_prices_one_digit_lower(self) -> None:
+        """R29: the non-vacuous arm — the guard does not fire on the value below.
+
+        At a rate of exactly 1, ``10**59`` quantizes to ``COST_PRECISION``
+        digits and must price; ``10**60`` needs one more and must not. Without
+        this pair the test above is satisfied by a function that refuses
+        everything, which is the shape this project keeps shipping.
+        """
+        rates = {"input": Decimal("1")}
+        assert price_usage(TokenUsage(input_tokens=10 ** (COST_PRECISION - 1)), rates) > 0
+        with pytest.raises(CostError):
+            price_usage(TokenUsage(input_tokens=10**COST_PRECISION), rates)
 
 
 # --- R30 ----------------------------------------------------------------------

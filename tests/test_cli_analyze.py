@@ -1099,15 +1099,6 @@ class TestFailClosedPricingR39:
         assert err == "swarm-observer: cost_precision_exceeded: span 1\n"
         assert not report.exists()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-1: with a single non-zero usage component the multiply and divide stay "
-            "exact, and quantize_cost — which sits outside price_usage's guard — raises a "
-            "raw decimal.InvalidOperation. It escapes main(), so the run prints a traceback "
-            "and exits 1, colliding with R39's 'a finding met the threshold'."
-        ),
-    )
     def test_r39_the_same_trace_with_one_component_also_exits_two(self, tmp_path: Path) -> None:
         """R11/R39: every fail-closed condition is exit 2 and one sanitized line."""
         source = self.huge_usage_file(tmp_path, 10**60, 0)
@@ -1118,20 +1109,20 @@ class TestFailClosedPricingR39:
         assert "Traceback" not in err
         assert not report.exists()
 
-    def test_r39_bug1_reproduces_as_an_uncaught_exception_from_main(self, tmp_path: Path) -> None:
-        """R11/R39: BUG-1 pinned as it behaves today, beside its xfail.
+    def test_r39_the_one_component_trace_names_the_span_like_the_two_component_one(
+        self, tmp_path: Path
+    ) -> None:
+        """R11/R39 (BUG-1, fixed in review): both forms produce the same line.
 
-        ``main`` is documented as "the only place a typed error becomes a process
-        outcome", and this input walks straight past it.
+        Replaces the reproduction that pinned the uncaught ``InvalidOperation``.
+        The two-component form was already correct, which is exactly why the
+        one-component form went unnoticed — so the assertion is that the two are
+        now indistinguishable on stderr, not merely that each is non-zero.
         """
-        from decimal import InvalidOperation
-
-        source = self.huge_usage_file(tmp_path, 10**60, 0)
-        with pytest.raises((InvalidOperation, CostError)) as caught:
-            invoke("analyze", str(source), "--json", str(tmp_path / "r.json"))
-        assert isinstance(caught.value, InvalidOperation), (
-            "BUG-1 appears to be fixed: delete this test and de-xfail the one above"
-        )
+        one = invoke("analyze", str(self.huge_usage_file(tmp_path, 10**60, 0)), "--json", "a.json")
+        two = invoke("analyze", str(self.huge_usage_file(tmp_path, 10**60, 1)), "--json", "b.json")
+        assert one == two
+        assert one == (EXIT_FAIL_CLOSED, "", "swarm-observer: cost_precision_exceeded: span 1\n")
 
     def test_r39_an_ordinary_large_trace_still_prices(self, tmp_path: Path) -> None:
         """R29: the non-vacuous arm — a trillion tokens is priced, not refused."""
@@ -1400,15 +1391,6 @@ class TestNulInTheOutputPathR39:
     cheaper input: no 60-digit token count, just a byte in an argument.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-7: check_output_path calls is_dir() on a path containing a NUL, which "
-            "raises a bare ValueError('embedded null byte') from outside every except "
-            "clause in main(). R39 pins an unwritable output path as exit 3; this is a "
-            "traceback and exit 1, which R39 assigns to 'a finding met the threshold'."
-        ),
-    )
     def test_r39_a_nul_in_the_output_path_is_a_usage_error(self, tmp_path: Path) -> None:
         """R39: an output path that cannot be written is exit 3, not a crash."""
         code, out, err = invoke("analyze", str(CLEAN), "--json", f"{tmp_path}/r\x00x.json")
@@ -1416,27 +1398,44 @@ class TestNulInTheOutputPathR39:
         assert out == ""
         assert "Traceback" not in err
 
-    def test_r39_bug7_reproduces_as_a_bare_valueerror_out_of_main(self, tmp_path: Path) -> None:
-        """R39/R11: BUG-7 pinned as it behaves today, beside its xfail."""
-        with pytest.raises(ValueError) as caught:
-            invoke("analyze", str(CLEAN), "--json", f"{tmp_path}/r\x00x.json")
-        assert not isinstance(caught.value, (UsageError, TraceError)), (
-            "BUG-7 appears to be fixed: delete this test and de-xfail the one above"
-        )
-        assert "null byte" in str(caught.value)
+    def test_r39_the_nul_never_reaches_stderr_as_a_byte(self, tmp_path: Path) -> None:
+        """R11 (BUG-7, fixed in review): the rejected path is not echoed raw."""
+        _, _, err = invoke("analyze", str(CLEAN), "--json", f"{tmp_path}/r\x00x.json")
+        assert err.count("\n") == 1
+        assert not any(ord(char) < 0x20 and char != "\n" for char in err)
 
-    def test_r39_a_nul_in_an_input_path_escapes_the_same_way(self, tmp_path: Path) -> None:
-        """R11/R39: the input side has the identical hole, in ``expand_inputs``.
+    def test_r39_a_nul_in_an_input_path_is_a_sanitized_fail_closed(self, tmp_path: Path) -> None:
+        """R11/R39 (BUG-7, fixed in review): the input side, at its own call site.
 
-        Recorded separately because the two are different call sites and a fix
-        that only guards ``check_output_path`` leaves this one open. R11's
-        posture is that *every* unreadable input is a sanitized exit 2.
+        Kept as a separate test because the two are different call sites and a
+        fix to ``check_output_path`` alone leaves this one open — which is what
+        the report said and what the fix had to answer. R11's posture is that
+        every unreadable input is a sanitized exit 2, not a usage error: the
+        command is well formed, the file is not readable.
         """
         report = tmp_path / "r.json"
-        with pytest.raises(ValueError) as caught:
-            invoke("analyze", f"{tmp_path}/in\x00put.jsonl", "--json", str(report))
-        assert "null byte" in str(caught.value)
+        code, out, err = invoke("analyze", f"{tmp_path}/in\x00put.jsonl", "--json", str(report))
+        assert code == EXIT_FAIL_CLOSED
+        assert out == ""
+        assert err.startswith("swarm-observer: unreadable_path: ")
+        assert "Traceback" not in err
+        assert err.count("\n") == 1
         assert not report.exists()
+
+    def test_r39_a_nul_inside_a_scanned_directory_argument_is_refused_too(
+        self, tmp_path: Path
+    ) -> None:
+        """R11: the third form — the NUL is in a *directory* argument.
+
+        ``expand_inputs`` asks ``is_dir()`` before the reader ever sees the
+        path, so this is a third call site with the same raw-``ValueError``
+        shape. Driven because BUG-1 and BUG-7 were two occurrences of one class
+        and the report's warning was that a per-call-site fix invites a third.
+        """
+        code, out, err = invoke("analyze", f"{tmp_path}/dir\x00/", "--json", str(tmp_path / "r"))
+        assert code == EXIT_FAIL_CLOSED
+        assert out == ""
+        assert "Traceback" not in err
 
     def test_r39_an_ordinary_output_path_is_still_written(self, tmp_path: Path) -> None:
         """R39: the non-vacuous arm — the same invocation without the NUL works."""
@@ -1444,3 +1443,99 @@ class TestNulInTheOutputPathR39:
         code, _, err = invoke("analyze", str(CLEAN), "--json", str(report))
         assert (code, err) == (EXIT_OK, "")
         assert report.is_file()
+
+
+class TestTheFailClosedFloorR11R39:
+    """R11/R39: ``main``'s catch-all, and the proof that it can fire.
+
+    Added by review. BUG-1 and BUG-7 were two unrelated inputs — a 60-digit
+    token count and a NUL byte in an argument — that each put a raw exception
+    past ``main``, printing a traceback and exiting **1**, which R39 assigns the
+    meaning "ran, and a finding met the threshold". Both call sites are fixed at
+    the call site, because a floor that turns a usage error into an exit 2 is a
+    worse answer than the exit 3 R39 pins for it. The floor exists for the
+    *third* input nobody has found yet.
+
+    A catch-all is exactly the guard shape this project's signature defect
+    inhabits: it reports green forever because nothing reaches it. So it is
+    driven directly, from three different exception types, and its message is
+    asserted to name the type and **not** the exception's text — an unsanitized
+    ``str(exc)`` on a pydantic or ``json`` error quotes the input, which is the
+    byte of file content R11 forbids on stderr.
+    """
+
+    @staticmethod
+    def _invoke_with(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> tuple[int, str, str]:
+        def boom(*_args: Any, **_kwargs: Any) -> int:
+            raise exc
+
+        monkeypatch.setattr(cli_main, "run", boom)
+        out, err = io.StringIO(), io.StringIO()
+        code = cli_main.main(["analyze", "x", "--json", "y.json"], stdout=out, stderr=err)
+        return code, out.getvalue(), err.getvalue()
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ValueError("embedded null byte"),
+            RecursionError("maximum recursion depth exceeded"),
+            OSError(28, "No space left on device"),
+        ],
+        ids=["ValueError", "RecursionError", "OSError"],
+    )
+    def test_r39_an_untyped_exception_is_one_sanitized_line_and_exit_two(
+        self, monkeypatch: pytest.MonkeyPatch, exc: Exception
+    ) -> None:
+        """R11/R39: the floor fires, and it fires as R11's shape."""
+        code, out, err = self._invoke_with(monkeypatch, exc)
+        assert code == EXIT_FAIL_CLOSED
+        assert out == ""
+        assert err == f"swarm-observer: unexpected_error: {type(exc).__name__}\n"
+
+    def test_r11_the_floor_never_echoes_the_exception_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R11: "may never contain a byte of file content" — including via ``str(exc)``."""
+        secret = "AKIAIOSFODNN7EXAMPLE /home/somebody/trace.jsonl line 4: {\x1b[31m"
+        _, _, err = self._invoke_with(monkeypatch, ValueError(secret))
+        assert "AKIA" not in err
+        assert "somebody" not in err
+        assert "\x1b" not in err
+        assert err.count("\n") == 1
+
+    def test_r39_the_floor_does_not_swallow_the_typed_clauses_above_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R39: the non-vacuous arm — the floor must not become the only clause.
+
+        A bare ``except Exception`` placed too high would turn every usage error
+        into an exit 2 and every fail-closed error into ``unexpected_error``,
+        which would pass a test that only asserts "exit 2 with one line". Each
+        typed clause is therefore re-asserted through the same entry point.
+        """
+        assert self._invoke_with(monkeypatch, UsageError("swarm-observer: error: nope")) == (
+            EXIT_USAGE,
+            "",
+            "swarm-observer: error: nope\n",
+        )
+        code, _, err = self._invoke_with(monkeypatch, CostError("cost_precision_exceeded", seq=7))
+        assert (code, err) == (
+            EXIT_FAIL_CLOSED,
+            "swarm-observer: cost_precision_exceeded: span 7\n",
+        )
+        code, _, err = self._invoke_with(monkeypatch, TraceError("invalid_json", source="a.jsonl"))
+        assert (code, err) == (EXIT_FAIL_CLOSED, "swarm-observer: invalid_json: a.jsonl\n")
+
+    def test_r39_a_keyboard_interrupt_is_not_reported_as_a_trace_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R39: the floor's *upper* bound — it catches ``Exception``, not ``BaseException``.
+
+        Reporting ``^C`` as ``unexpected_error`` and exiting 2 would tell a CI
+        wrapper the trace was malformed. ``KeyboardInterrupt`` and ``SystemExit``
+        derive from ``BaseException`` and must pass through untouched.
+        """
+        with pytest.raises(KeyboardInterrupt):
+            self._invoke_with(monkeypatch, KeyboardInterrupt())
+        with pytest.raises(SystemExit):
+            self._invoke_with(monkeypatch, SystemExit(9))

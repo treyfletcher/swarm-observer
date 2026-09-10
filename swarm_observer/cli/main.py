@@ -63,6 +63,11 @@ EXIT_USAGE = 3
 
 PROGRAM = "swarm-observer"
 
+#: R11: the code :func:`main`'s catch-all renders when an exception reaches it
+#: that no typed clause claimed. It names the exception's type and never its
+#: message, because a message can quote the input.
+_UNEXPECTED_CODE = "unexpected_error"
+
 #: R38: the ``--fail-on`` thresholds. ``none`` never fails, and is the default,
 #: because a tool that exits non-zero by default is a tool people wrap in
 #: ``|| true``.
@@ -241,7 +246,15 @@ def expand_inputs(raw: Sequence[str]) -> tuple[Path, ...]:
     expanded: list[Path] = []
     for item in raw:
         path = Path(item)
-        if path.is_dir():
+        try:
+            is_directory = path.is_dir()
+        except (OSError, ValueError):
+            # A path the OS cannot even be asked about — an embedded NUL makes
+            # `os.stat` raise a bare `ValueError` (review, BUG-7). It is not a
+            # directory, so it goes to the reader, which owns "this input cannot
+            # be read" and answers with R11's sanitized exit 2.
+            is_directory = False
+        if is_directory:
             expanded.extend(sorted(path.glob(f"*{JSONL_SUFFIX}"), key=lambda child: child.name))
             continue
         expanded.append(path)
@@ -254,6 +267,13 @@ def check_output_path(raw: str) -> Path:
     Checked *before* anything is read, so a mistyped ``--json`` costs a usage
     error rather than a full ingest followed by a write failure.
     """
+    if "\x00" in raw:
+        # `Path(raw).parent.is_dir()` calls `os.stat`, which raises a bare
+        # `ValueError("embedded null byte")` from outside every `except` in
+        # `main` (review, BUG-7). The docstring above already covers it — an
+        # output that "cannot be written" is exit 3 — so the condition is
+        # answered here, in the typed vocabulary, rather than as a traceback.
+        raise UsageError(f"{PROGRAM}: error: output path contains a NUL byte")
     path = Path(raw)
     directory = path.parent if str(path.parent) else Path()
     if not directory.is_dir():
@@ -430,6 +450,22 @@ def main(
     except UsageError as exc:
         err.write(exc.message.rstrip("\n") + "\n")
         return EXIT_USAGE
+    except Exception as exc:
+        # The floor under the three typed clauses above, added by review after
+        # **two unrelated inputs** — a 10**60 token count and a NUL in an output
+        # path — each put a raw exception past this function, printing a
+        # traceback and exiting 1. R39 gives 1 the meaning "ran, and a finding
+        # met the threshold", so a wrapper reading the exit code was told the
+        # run succeeded. Both call sites are fixed; this clause is what makes
+        # the *third* one an exit 2 instead of a third bug report.
+        #
+        # The line names the exception's **type** and nothing else. `str(exc)`
+        # is not sanitized and, for a pydantic or json error, quotes the input
+        # — which is precisely the byte of file content R11 forbids on stderr.
+        # A catch-all that is never reached is a check that cannot fail, so
+        # `_UNEXPECTED_CODE` is asserted from a test that forces it.
+        err.write(f"{PROGRAM}: {_UNEXPECTED_CODE}: {_one_line_safe(type(exc).__name__)}\n")
+        return EXIT_FAIL_CLOSED
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via `python -m`

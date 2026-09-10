@@ -322,9 +322,16 @@ def price_usage(usage: TokenUsage, rates: Mapping[str, Decimal]) -> Decimal:
                 continue
             subtotal = _EXACT.add(subtotal, _EXACT.multiply(Decimal(tokens), rate))
         exact = _EXACT.divide(subtotal, Decimal(1_000_000))
+        # The quantize is inside the guard, not after it. With a single non-zero
+        # component the multiply and the divide both stay exact, so no signal is
+        # raised on the way in; the quantize to six places is then the first step
+        # that can need more than COST_PRECISION digits, and outside this `try`
+        # it raised a bare `decimal.InvalidOperation` that walked past `main`
+        # (review, BUG-1). Every arithmetic step in this function reports the one
+        # typed error, which is what R29's "traps" is for.
+        return quantize_cost(exact)
     except DecimalException:
         raise CostError("cost_precision_exceeded") from None
-    return quantize_cost(exact)
 
 
 def missing_price_keys(usage: TokenUsage, rates: Mapping[str, Decimal]) -> tuple[str, ...]:

@@ -28,6 +28,7 @@ model being asked to try again, and those retries are the tokens.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Sequence
 
 from swarm_observer.detect.base import (
@@ -73,6 +74,37 @@ def error_text(span: Span) -> str:
     return span.error.detail if span.error is not None else ""
 
 
+def qualifying_windows(error_positions: Sequence[int], span_count: int) -> list[tuple[int, int]]:
+    """Every ``WINDOW_SPANS``-wide window of one agent holding ``MIN_ERRORS`` errors.
+
+    ``error_positions`` is ascending, and the window start advances by one each
+    step, so both ends of the window are found by pointers that only ever move
+    forward: the whole scan is O(spans + errors) rather than a fresh count of
+    the error list per window start. A rate-limited session is an agent whose
+    spans are *mostly* errors, which is the input that made the nested count
+    quadratic (BUG-2) — and tens of thousands of spans is the ordinary case for
+    this tool, not an adversarial one.
+
+    The last window of a short agent is its whole span list: R20 describes "a
+    sliding window of 10 consecutive spans", and an agent with six spans has no
+    such window, which would make this detector structurally unable to fire on
+    a short agent (A-b4, review ruling S11).
+    """
+    windows: list[tuple[int, int]] = []
+    first_inside = 0
+    first_outside = 0
+    total_errors = len(error_positions)
+    for start in range(max(1, span_count - WINDOW_SPANS + 1)):
+        limit = start + WINDOW_SPANS
+        while first_outside < total_errors and error_positions[first_outside] < limit:
+            first_outside += 1
+        while first_inside < total_errors and error_positions[first_inside] < start:
+            first_inside += 1
+        if first_outside - first_inside >= MIN_ERRORS:
+            windows.append((start, min(limit, span_count)))
+    return windows
+
+
 def merge_runs(windows: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
     """Collapse overlapping half-open index ranges into maximal runs (R20).
 
@@ -108,16 +140,14 @@ class RetryStorm:
             error_positions = [index for index, kind in enumerate(kinds) if kind]
             if len(error_positions) < MIN_ERRORS:
                 continue
-            windows = [
-                (start, min(start + WINDOW_SPANS, len(spans)))
-                for start in range(max(1, len(spans) - WINDOW_SPANS + 1))
-                if sum(
-                    1 for position in error_positions if start <= position < start + WINDOW_SPANS
-                )
-                >= MIN_ERRORS
-            ]
+            windows = qualifying_windows(error_positions, len(spans))
             for start, stop in merge_runs(windows):
-                inside = [position for position in error_positions if start <= position < stop]
+                # Merged runs are disjoint and ascending and so is
+                # ``error_positions``, so each run's errors are one slice of it
+                # rather than a fresh scan (BUG-2).
+                low = bisect_left(error_positions, start)
+                high = bisect_left(error_positions, stop)
+                inside = error_positions[low:high]
                 run_start, run_stop = inside[0], inside[-1] + 1
                 run = spans[run_start:run_stop]
                 observed = {kinds[position] for position in inside}
@@ -167,4 +197,5 @@ __all__ = [
     "error_kind",
     "error_text",
     "merge_runs",
+    "qualifying_windows",
 ]

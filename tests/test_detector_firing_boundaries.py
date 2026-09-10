@@ -19,6 +19,7 @@ population can be 8 without a 27-record file.
 
 from __future__ import annotations
 
+import random
 import time
 from typing import Any
 
@@ -61,6 +62,7 @@ from swarm_observer.detect.retry_storm import (
     WINDOW_SPANS,
     error_kind,
     merge_runs,
+    qualifying_windows,
 )
 from swarm_observer.detect.unresolved_tool_call import (
     REASONS,
@@ -618,6 +620,47 @@ class TestRetryStormR20:
         assert merge_runs([(0, 5), (3, 10)]) == [(0, 10)]
         assert merge_runs([(5, 10), (0, 3)]) == [(0, 3), (5, 10)]
         assert merge_runs([(0, 5), (6, 10)]) == [(0, 5), (6, 10)]
+
+    @pytest.mark.parametrize(
+        ("label", "span_count", "positions", "expected"),
+        [
+            ("no errors", 20, [], []),
+            ("two errors is not a window", 20, [0, 1], []),
+            ("three at the very start", 20, [0, 1, 2], [(0, 10)]),
+            ("three at the very end", 20, [17, 18, 19], [(10, 20)]),
+            ("errors exactly 9 apart still share a window", 20, [0, 5, 9], [(0, 10)]),
+            ("errors exactly 10 apart never share one", 20, [0, 5, 10], []),
+            ("a short agent is one window", 6, [0, 2, 5], [(0, 6)]),
+            ("a short agent below the threshold", 6, [0, 5], []),
+            ("exactly ten spans is one window", 10, [0, 4, 9], [(0, 10)]),
+        ],
+    )
+    def test_r20_qualifying_windows_is_the_sliding_ten_span_count(
+        self, label: str, span_count: int, positions: list[int], expected: list[tuple[int, int]]
+    ) -> None:
+        """R20: the window scan, directly, at both sides of its two boundaries.
+
+        The nested count this replaced (BUG-2) was correct and quadratic; the
+        pointer walk is correct and linear, and "correct" has to be asserted
+        against something other than the implementation it replaced. Errors
+        nine apart share a ten-span window and errors ten apart never do —
+        the pair the corpus could not previously distinguish.
+        """
+        assert qualifying_windows(positions, span_count) == expected
+
+    def test_r20_qualifying_windows_agrees_with_a_direct_recount(self) -> None:
+        """R20: the pointer walk equals a fresh count per window, over random layouts."""
+        rnd = random.Random(20260910)
+        for _ in range(2_000):
+            span_count = rnd.randint(1, 40)
+            positions = sorted(rnd.sample(range(span_count), rnd.randint(0, span_count)))
+            naive = [
+                (start, min(start + WINDOW_SPANS, span_count))
+                for start in range(max(1, span_count - WINDOW_SPANS + 1))
+                if sum(1 for spot in positions if start <= spot < start + WINDOW_SPANS)
+                >= MIN_ERRORS
+            ]
+            assert qualifying_windows(positions, span_count) == naive, (span_count, positions)
 
     def test_r20_merge_runs_treats_the_ranges_as_half_open(self) -> None:
         """R20, BUG-1: abutting ranges share no index, so they do not merge.

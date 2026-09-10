@@ -503,29 +503,32 @@ class TestScaleR13:
         detector.run(trace, CONFIG)
         return time.perf_counter() - started
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-2: retry_storm counts errors per window with a nested scan, so a "
-            "run of N error spans costs O(N^2). Quadrupling N multiplies the time "
-            "by ~16 rather than by ~4."
-        ),
-    )
     def test_r20_retry_storm_does_not_grow_quadratically(self) -> None:
-        """R20: the window scan should be linear in an agent's span count.
+        """R20: the window scan is linear in an agent's span count (BUG-2).
 
         An agent whose spans are all errors is not exotic — a rate-limited run
-        looks exactly like this. The window loop asks, for every one of the
-        ``N - 9`` window starts, how many of the ``N`` error positions fall
-        inside it, which is a nested scan over the same list.
+        looks exactly like this, and tens of thousands of spans is the ordinary
+        size of a transcript, not an adversarial one.
+
+        Two bounds, because each catches what the other cannot. The *ratio*
+        catches a regression on a slow shared runner, where an absolute number
+        would be noise. The *ceiling* catches a regression that happens to
+        scale both measurements together — and it is a real number rather than
+        a comfortable one: the quadratic form took 9.2 s on this input, the
+        linear form takes about 0.04 s, and the bound sits between them with
+        room on both sides.
         """
         from swarm_observer.detect.registry import detector_by_slug
 
         from .synthetic_traces import error_run
 
         storm = detector_by_slug("retry_storm")
-        small = self._time(storm, error_run(2_500, range(2_500)))
-        large = self._time(storm, error_run(10_000, range(10_000)))
+        small = max(self._time(storm, error_run(5_000, range(5_000))), 1e-4)
+        large = self._time(storm, error_run(20_000, range(20_000)))
+        assert large < 2.0, (
+            f"20,000 error spans took {large:.2f}s; the quadratic form took ~9.2s "
+            "and the linear form takes ~0.04s"
+        )
         assert large < small * 8.0, (
             f"4x the spans cost {large / small:.1f}x the time "
             f"({small:.3f}s -> {large:.3f}s); linear would be ~4x"

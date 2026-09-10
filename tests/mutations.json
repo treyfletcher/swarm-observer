@@ -2523,7 +2523,7 @@
       "operator": "normalization-drop",
       "old": "    keys = sorted({item.model_key for item in priced})",
       "new": "    keys = list({item.model_key for item in priced})",
-      "verdict": "SURVIVED",
+      "verdict": "killed",
       "why_it_survives": "REAL, and fixed: dropping `sorted()` from `_by_model` was invisible because NO FIXTURE IN THE CORPUS RESOLVES MORE THAN ONE MODEL KEY, so R47's determinism matrix -- the check that exists to catch a set-iteration dependency -- had no multi-model trace to run on. `TestMultiModelOrderingR31R47` builds one with six keys and asserts under fixed PYTHONHASHSEEDs in subprocesses. Now KILLED."
     },
     {
@@ -2614,7 +2614,7 @@
       "operator": "call-argument",
       "old": "                \"wasted_unpriced\": usage_document(row.wasted_unpriced),",
       "new": "                \"wasted_unpriced\": usage_document(row.wasted),",
-      "verdict": "SURVIVED",
+      "verdict": "killed",
       "why_it_survives": "REAL, and fixed: `cost_document` rendering `wasted_unpriced` from `row.wasted` survived, because BUG-4's decomposition was asserted on the `DetectorWaste` model and never on the JSON a reader receives. `TestByDetectorDocumentR31` asserts the rendered row. Now KILLED."
     },
     {
@@ -2669,25 +2669,9 @@
     }
   },
   "final_run": {
-    "commit": "the tip of feature/so-i3",
-    "method": "full serial run of all 231 mutants, one interpreter at a time, nothing else on the machine",
-    "cpython_3.11.15": {
-      "total": 231,
-      "killed": 228,
-      "survived": 3,
-      "not_applied": 0
-    },
-    "cpython_3.12.3": {
-      "total": 231,
-      "killed": 228,
-      "survived": 3,
-      "not_applied": 0
-    },
-    "survivors": [
-      "S11",
-      "W-C11",
-      "W-M11-CONTROL"
-    ],
-    "note": "Identical on both interpreters. S11 and W-C11 are equivalent mutants; W-M11-CONTROL is the declared control arm and MUST survive -- its survival is the evidence that the 228 kills come from the mutations."
+    "when": "increment-3 review, final commit",
+    "python3.11.15": "TOTAL 289 killed 285 SURVIVED 4 not-applied 0 -- ['S11', 'W-M11-CONTROL', 'R-S02', 'R-R02']",
+    "python3.12.3": "wave 3 in full: TOTAL 58 killed 56 SURVIVED 2 not-applied 0 -- ['R-S02', 'R-R02']; the whole ledger's four survivors separately re-checked and identical",
+    "note": "Run serially, one interpreter at a time, with the tree digested between mutants. The declared control arm W-M11-CONTROL survives in both, which is the warrant for the killed verdicts. An earlier full run reported 289/289 killed: that was a source-text assertion the reviewer had added to the suite failing for every mutant, and the control arm was the only thing that showed it. See the review, section 7.5."
   }
 }

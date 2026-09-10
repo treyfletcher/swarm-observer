@@ -601,15 +601,30 @@ narrowing, guard-scope change.
 ### 7.2 Results
 
 **59 mutants · 54 killed · 5 survived · 0 unapplied**, against the branch as
-handed to me. Run serially, one interpreter at a time, per the tester's own
-harness contract.
+handed to me, on CPython 3.11.15. Run serially, never two sweeps at once, per
+the tester's own harness contract.
 
-Re-checked at the final commit against the finished suite, on **both**
-interpreters, over the two prior waves' survivors plus wave 3's: `W-C11`,
-`R-C07` and `R-J09` are killed; `S11`, `W-M11-CONTROL`, `R-S02` and `R-R02`
-survive. **The two interpreters name the same four**, which is also the
-confirmation that nothing in this branch's new code depends on a
-Unicode-table-versioned predicate or a recursion limit.
+Then the whole ledger — **all 289 live entries, wave 1 and wave 2 and wave 3
+together** — re-run against the finished suite at the final commit:
+
+```
+TOTAL 289  killed 285  SURVIVED 4  not-applied 0
+survivors: ['S11', 'W-M11-CONTROL', 'R-S02', 'R-R02']
+```
+
+Two upheld equivalents from the tester's ledger, two of my own, and the
+declared control arm among them where it belongs. `W-C11`, `R-C07`, `R-J09` and
+`C10` are all killed. That whole-ledger re-run is the measurement that matters,
+because it is the one that found `C10` and the one that caught the harness
+breaking (§7.3, §7.5).
+
+On **CPython 3.12.3**, wave 3 was re-run in full against the finished suite —
+58 live entries (`R-M07` is retired, its subject deleted), **56 killed, 2
+survived, 0 unapplied**, and the two are `R-S02` and `R-R02`: the same two
+equivalents, with `R-C07` and `R-J09` killed exactly as on 3.11. The four-mutant
+survivor set of the whole ledger was separately re-checked on 3.12 and is
+identical. Nothing in this branch's new code depends on a
+Unicode-table-versioned predicate, a recursion limit or a hash seed.
 
 **Three of the five survivors were real gaps. All three are now closed.**
 

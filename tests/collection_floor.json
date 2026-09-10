@@ -11,7 +11,7 @@
     "tests/test_model_schema.py": 89,
     "tests/test_reader_and_limits.py": 91,
     "tests/test_record_tolerance.py": 47,
-    "tests/test_suite_integrity.py": 15,
+    "tests/test_suite_integrity.py": 18,
     "tests/test_traceability.py": 6,
     "tests/test_warnings_and_spans.py": 58
   }

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+import unicodedata
 from pathlib import Path
 
 from .conftest import (
@@ -174,6 +175,82 @@ class TestCanaryLedgerR50:
                 "observe its guard failing is a canary in name only (R50)"
             )
             assert "R50" in source, f"{path.relative_to(REPO)} does not cite R50"
+
+
+class TestCheckedInDataIsInterpreterStableR8:
+    """R8: committed test data may not contain a code point the interpreters disagree on.
+
+    Found while fixing the 3.12 nesting-bomb failure. R8 defines preview
+    normalization as "replace every character that is not ``str.isprintable()``",
+    and ``str.isprintable()`` answers from the Unicode table compiled into the
+    running interpreter — 14.0 on CPython 3.11, 15.0 on 3.12. A code point
+    assigned in 15.0 is printable on 3.12 and becomes a space on 3.11, so the
+    *same trace* yields different ``Span.text_preview`` bytes on the two
+    interpreters CI builds. That collides with the byte-identical guarantee the
+    spec makes for reports, and it will silently make increment 4's golden files
+    version-dependent.
+
+    R8 names ``str.isprintable()`` explicitly, so the implementation is correct
+    and the fix is a spec amendment, not a code change (recorded for the PM in
+    the review). What is fixable here is the blast radius: keep the drift out of
+    checked-in data. A code point unassigned on the running interpreter is one a
+    newer interpreter may assign, so it is exactly the set at risk — and because
+    CI runs the oldest supported interpreter too, that leg catches anything a
+    newer one would render differently. The version matrix is the enforcement,
+    which is the lesson of the bug that prompted this test.
+    """
+
+    def data_files(self) -> list[Path]:
+        """Every checked-in fixture and golden file, as text."""
+        roots = (TESTS_DIR / "fixtures", TESTS_DIR / "golden")
+        return sorted(
+            path
+            for root in roots
+            if root.is_dir()
+            for path in root.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        )
+
+    def test_r8_the_scan_has_files_to_scan(self) -> None:
+        """R8: an empty corpus would make the check below vacuously pass."""
+        files = self.data_files()
+        assert files, "no fixture or golden files found to scan"
+        assert any(path.suffix == ".jsonl" for path in files)
+
+    def test_r8_no_committed_character_is_unassigned_on_this_interpreter(self) -> None:
+        """R8: an unassigned code point renders differently on a newer interpreter."""
+        offenders: list[str] = []
+        for path in self.data_files():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:  # pragma: no cover - no binary fixtures today
+                continue
+            for index, char in enumerate(text):
+                if unicodedata.category(char) == "Cn":
+                    offenders.append(f"{path.relative_to(REPO)} offset {index}: U+{ord(char):04X}")
+        assert not offenders, (
+            "committed test data contains code points unassigned in Unicode "
+            f"{unicodedata.unidata_version} (this interpreter). They are printable on a "
+            "newer interpreter and a space on this one, so previews — and any golden "
+            f"built from them — differ by Python version: {offenders[:10]}"
+        )
+
+    def test_r8_the_check_would_catch_a_drifting_code_point(self) -> None:
+        """R8: the guard's failure branch fires on a code point from a later table.
+
+        U+1F6DC was assigned in Unicode 15.0. On CPython 3.11 it is ``Cn`` and
+        previews as a space; on 3.12 it is ``So`` and previews as itself. Whichever
+        interpreter is running, at least one of the two probes below must be
+        unassigned, or this guard has nothing to detect and is inert.
+        """
+        later_additions = ("\U0001f6dc", "\U0001e030", "\U00011f00")  # Unicode 15.0
+        much_later = ("\U00013460", "\U00016d40")  # Unicode 16.0
+        candidates = later_additions + much_later
+        assert any(unicodedata.category(char) == "Cn" for char in candidates), (
+            "every probe code point is assigned on this interpreter; the guard "
+            "needs a probe from a table newer than "
+            f"{unicodedata.unidata_version}"
+        )
 
 
 def test_r49_collection_floor_json_has_a_stable_shape() -> None:

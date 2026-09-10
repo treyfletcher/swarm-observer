@@ -148,6 +148,36 @@ def _optional(value: str | None, *, previews: bool) -> str | None:
     return None if value is None else free_text(value, previews=previews)
 
 
+def identifier(value: str) -> str:
+    """A trace-derived string this document also uses as a **key** (R33).
+
+    ``agent_id``, ``parent_agent_id`` and ``ParseWarning.detail`` are
+    trace-derived — R5 takes an agent id straight from the record's ``agentId``,
+    and R4 puts the unknown record *type* into a warning's detail — and they
+    reached the report through neither the redactor nor ``--no-previews``
+    (review, BUG-2). ``AKIAIOSFODNN7EXAMPLE`` matches R2's agent-id alphabet
+    exactly, so a credential-shaped agent id arrived verbatim in five places
+    **including under the flag**. That is the third occurrence of this project's
+    worst class: increment 1 and increment 2 (the S13 ruling on ``tool_name``)
+    each found a trace-derived field bypassing the boundary because its type
+    looked like an identifier rather than like text.
+
+    So: **redacted, in both modes, like every other trace-derived string.**
+
+    Not *blanked* under ``--no-previews``, which is the one way this differs
+    from :func:`free_text`, and for the same reason A-c7 keeps ``metrics``: an
+    agent id is the join key between ``spans[]``, ``agents[]`` and
+    ``cost.by_agent[]``, and a warning's detail is half of the ``(code, detail)``
+    pair R10 aggregates on. Blanking them collapses distinct rows into one and
+    makes the document unreadable rather than redacted. R2 constrains an agent
+    id's alphabet and R2 calls a warning detail "an enumerated slug or number
+    only", so neither is "trace free text" in R38's sense — but both are
+    trace-derived, which is what R33 keys on. The residual tension is real and
+    is the PM's: see the review's ruling on S16.
+    """
+    return redact(value)
+
+
 def usage_document(usage: TokenUsage) -> dict[str, int]:
     """R2's five token components as plain integers."""
     return {
@@ -174,7 +204,7 @@ def span_document(span: Span, *, previews: bool = True) -> dict[str, Any]:
         "seq": span.seq,
         "span_id": span.span_id,
         "parent_span_id": span.parent_span_id,
-        "agent_id": span.agent_id,
+        "agent_id": identifier(span.agent_id),
         "kind": span.kind,
         "start": optional_timestamp(span.start),
         "end": optional_timestamp(span.end),
@@ -203,11 +233,13 @@ def span_document(span: Span, *, previews: bool = True) -> dict[str, Any]:
 def agent_document(agent: AgentRun, *, previews: bool = True) -> dict[str, Any]:
     """One agent run (R2, R33, R38)."""
     return {
-        "agent_id": agent.agent_id,
+        "agent_id": identifier(agent.agent_id),
         "agent_index": agent.agent_index,
         "agent_type": _optional(agent.agent_type, previews=previews),
         "description": free_text(agent.description, previews=previews),
-        "parent_agent_id": agent.parent_agent_id,
+        "parent_agent_id": (
+            None if agent.parent_agent_id is None else identifier(agent.parent_agent_id)
+        ),
         "depth": agent.depth,
         "span_seqs": list(agent.span_seqs),
         "start": optional_timestamp(agent.start),
@@ -259,7 +291,7 @@ def finding_document(finding: Finding, *, previews: bool = True) -> dict[str, An
         "severity": finding.severity,
         "summary": finding.summary,
         "span_seqs": list(finding.span_seqs),
-        "agent_ids": list(finding.agent_ids),
+        "agent_ids": [identifier(agent_id) for agent_id in finding.agent_ids],
         "metrics": metrics_document(finding.metrics),
         "previews": [free_text(text, previews=previews) for text in finding.previews],
         "wasted": usage_document(finding.wasted),
@@ -303,7 +335,7 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         },
         "by_agent": [
             {
-                "agent_id": row.agent_id,
+                "agent_id": identifier(row.agent_id),
                 "agent_index": row.agent_index,
                 "priced_spans": row.priced_spans,
                 "unpriced_spans": row.unpriced_spans,
@@ -334,7 +366,7 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         "spans": [
             {
                 "seq": row.seq,
-                "agent_id": row.agent_id,
+                "agent_id": identifier(row.agent_id),
                 "model": free_text(row.model, previews=previews),
                 "model_key": row.model_key,
                 "usage": usage_document(row.usage),
@@ -345,7 +377,7 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         "unpriced": [
             {
                 "seq": row.seq,
-                "agent_id": row.agent_id,
+                "agent_id": identifier(row.agent_id),
                 "model": free_text(row.model, previews=previews),
                 "reason": row.reason,
                 "missing_price_keys": list(row.missing_price_keys),
@@ -422,7 +454,11 @@ def report_document(
         "findings": [finding_document(finding, previews=options.previews) for finding in findings],
         "cost": cost_document(cost, previews=options.previews),
         "warnings": [
-            {"code": warning.code, "count": warning.count, "detail": warning.detail}
+            {
+                "code": warning.code,
+                "count": warning.count,
+                "detail": identifier(warning.detail),
+            }
             for warning in trace.warnings
         ],
     }
@@ -462,6 +498,7 @@ __all__ = [
     "finding_document",
     "format_timestamp",
     "free_text",
+    "identifier",
     "last_timestamp",
     "metrics_document",
     "optional_timestamp",

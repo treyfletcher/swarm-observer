@@ -649,41 +649,119 @@ class TestNoPreviewsGuardR38:
     @pytest.mark.xfail(
         strict=True,
         reason=(
-            "BUG-2: Span.agent_id and AgentRun.agent_id/parent_agent_id are trace-derived "
-            "(R5 takes them from the record's agentId) and reach the report neither "
-            "redacted nor blanked, in both modes. ParseWarning.detail carries a "
-            "trace-derived record-type slug the same way."
+            "BUG-2's remaining half, held open deliberately. Review routed every "
+            "trace-derived identifier through R33's redactor (both modes), which closes "
+            "the security half. It did not *blank* them under --no-previews: agent_id is "
+            "the join key between spans[], agents[] and cost.by_agent[], and a warning's "
+            "detail is half of the (code, detail) pair R10 aggregates on, so blanking "
+            "collapses distinct rows. R2 calls both an identifier rather than free text, "
+            "which is the reading the code follows; R38's 'entirely' is the reading this "
+            "test follows. The PM settles it — see the review's ruling on S16."
         ),
     )
     def test_r38_no_trace_derived_string_survives_the_flag(self) -> None:
         """R38: "omits trace free text entirely", read as governing every field."""
         assert sentinel_paths(document_of(sentinel_trace(), previews=False)) == set()
 
-    def test_r38_bug2_reproduces_as_a_credential_shaped_agent_id(self) -> None:
-        """R33/R38: BUG-2 with a payload rather than a sentinel.
+    def test_r33_a_credential_shaped_agent_id_is_redacted_in_both_modes(self) -> None:
+        """R33 (BUG-2, fixed in review): an agent id is trace-derived.
 
-        An ``agentId`` of ``AKIAIOSFODNN7EXAMPLE`` matches R2's agent-id alphabet
-        exactly, so the mapper keeps it verbatim, and it then reaches the report
-        five times without passing the redactor — in ``--no-previews`` mode too.
+        ``AKIAIOSFODNN7EXAMPLE`` matches R2's agent-id alphabet exactly, so the
+        mapper keeps it verbatim and it reached the report five times without
+        passing the redactor — under ``--no-previews`` too. Both modes are
+        driven, because the defect was present in both and a fix wired only into
+        the ``--no-previews`` path would leave the default run leaking.
         """
         builder = TraceBuilder()
         builder.model_call(
             agent_id="AKIAIOSFODNN7EXAMPLE", model="nowhere", usage=TokenUsage(input_tokens=1)
         )
         for previews in (True, False):
-            text = render_of(builder.build(), previews=previews)
-            assert "AKIAIOSFODNN7EXAMPLE" in text, (
-                "BUG-2 appears to be fixed: delete this test and de-xfail the one above"
-            )
+            document = document_of(builder.build(), previews=previews)
+            text = json.dumps(document)
+            assert "AKIAIOSFODNN7EXAMPLE" not in text
+            assert marker("aws_key_id") in text
+            # Every one of the five paths the bug report named, by path rather
+            # than by a substring search over the whole document: a search is
+            # satisfied by one of them being fixed.
+            assert document["spans"][0]["agent_id"] == marker("aws_key_id")
+            assert document["agents"][0]["agent_id"] == marker("aws_key_id")
+            assert document["cost"]["by_agent"][0]["agent_id"] == marker("aws_key_id")
+            assert document["cost"]["unpriced"][0]["agent_id"] == marker("aws_key_id")
 
-    def test_r38_bug2_also_reaches_a_parse_warning_detail(self) -> None:
-        """R33/R38: a record type of ``ghp_…`` becomes a warning detail verbatim."""
+    def test_r33_a_credential_shaped_agent_id_is_redacted_on_a_priced_row_too(self) -> None:
+        """R33: ``cost.spans[]`` — the fifth path, which needs a *priceable* span."""
+        builder = TraceBuilder()
+        builder.model_call(
+            agent_id="AKIAIOSFODNN7EXAMPLE",
+            model="claude-haiku-4-5",
+            usage=TokenUsage(input_tokens=1_000),
+        )
+        document = document_of(builder.build())
+        assert document["cost"]["spans"][0]["agent_id"] == marker("aws_key_id")
+
+    def test_r33_a_credential_shaped_parent_agent_id_is_redacted(self) -> None:
+        """R33: ``agents[].parent_agent_id`` — a second field, a second record."""
+        agent = AgentRun(
+            agent_id="child",
+            agent_index=1,
+            parent_agent_id="AKIAIOSFODNN7EXAMPLE",
+            span_seqs=(0,),
+        )
+        for previews in (True, False):
+            document = agent_document(agent, previews=previews)
+            assert document["parent_agent_id"] == marker("aws_key_id")
+        # ``None`` and a redacted value are different claims and stay different.
+        assert agent_document(AgentRun(agent_id="root", agent_index=0))["parent_agent_id"] is None
+
+    def test_r33_a_credential_shaped_finding_agent_id_is_redacted(self) -> None:
+        """R33: ``findings[].agent_ids`` — the path the sentinel sweep could not see.
+
+        Found by review rather than by the sweep: the sentinel trace produces no
+        findings at all, so the whole ``findings[]`` section was outside the set
+        comparison that is supposed to catch a new trace-derived field. R14 sorts
+        agent ids into every finding, and they arrived there raw.
+        """
+        finding = build_finding(
+            trace=sentinel_trace(),
+            detector="failed_tool_call",
+            severity="info",
+            summary="one failed call",
+            span_seqs=(2,),
+            agent_ids=("AKIAIOSFODNN7EXAMPLE",),
+            metrics={"failures": 1},
+            previews=(),
+            wasted=TokenUsage(),
+        )
+        assert finding_document(finding)["agent_ids"] == [marker("aws_key_id")]
+        assert finding_document(finding, previews=False)["agent_ids"] == [marker("aws_key_id")]
+
+    def test_r33_a_credential_shaped_warning_detail_is_redacted(self) -> None:
+        """R33 (BUG-2): R4 puts the unknown record *type* into a warning detail."""
         builder = TraceBuilder()
         builder.model_call(usage=TokenUsage(input_tokens=1))
         builder.warning("unknown_record_type", 1, "ghp_abcdefghijklmnopqrstuv")
         for previews in (True, False):
-            text = render_of(builder.build(), previews=previews)
-            assert "ghp_abcdefghijklmnopqrstuv" in text
+            document = document_of(builder.build(), previews=previews)
+            assert document["warnings"][0]["detail"] == marker("github_token")
+            assert document["warnings"][0]["code"] == "unknown_record_type"
+            assert document["warnings"][0]["count"] == 1
+
+    def test_r33_an_ordinary_identifier_is_not_mangled_by_the_redactor(self) -> None:
+        """R33: the non-vacuous arm — redaction must not rewrite ordinary ids.
+
+        An agent id is a join key between ``spans[]``, ``agents[]`` and
+        ``cost.by_agent[]``. If the redactor moved an ordinary id, those joins
+        would break, so the ordinary case is asserted to be byte-identical and
+        the three sections asserted to still agree with each other.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="agent-7", model="claude-haiku-4-5", usage=TokenUsage())
+        document = document_of(builder.build())
+        assert document["spans"][0]["agent_id"] == "agent-7"
+        assert document["agents"][0]["agent_id"] == "agent-7"
+        assert {row["agent_id"] for row in document["cost"]["by_agent"]} == {"agent-7"}
+        assert document["warnings"] == []
 
     def test_r38_metrics_are_redacted_but_deliberately_not_blanked(self) -> None:
         """A-c7: R15 hashes ``metrics`` into the id the same document prints."""

@@ -185,6 +185,41 @@ def generated_non_idempotent() -> tuple[str, ...]:
     )
 
 
+def _redact_without_the_idempotence_guard(text: str) -> str:
+    """``redact`` as it behaved before review fixed BUG-3 — the reverted arm.
+
+    A deliberate reimplementation of the *defect*, not of the function: the
+    ``secret_assignment`` replacement without the one condition that leaves an
+    already-marked value alone. It exists so
+    ``test_r33_the_generator_can_produce_a_distinguishing_input`` can keep
+    proving its premise now that the real function no longer produces a
+    counterexample. Everything else — the pattern table, its order, the
+    name-and-separator preservation — is the shipped code's, imported rather
+    than copied, so this cannot drift into testing a different function.
+
+    Kept in the test suite deliberately: this is the same shape as
+    ``tests/canaries/``, a guard's subject broken on purpose to show the guard
+    can still see it.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        whole = match.group(0)
+        name = match.group(1)
+        rest = whole[len(name) :]
+        separator = 0
+        while separator < len(rest) and rest[separator] not in "=:":
+            separator += 1
+        return f"{name}{rest[: separator + 1]}{marker(NAME_PRESERVING_LABEL)}"
+
+    redacted = text
+    for label, pattern in REDACTION_PATTERNS:
+        if label == NAME_PRESERVING_LABEL:
+            redacted = pattern.sub(replace, redacted)
+        else:
+            redacted = pattern.sub(marker(label), redacted)
+    return redacted
+
+
 def corpus_free_text() -> list[str]:
     """Every trace-derived free-text string the checked-in fixtures produce."""
     texts: list[str] = []
@@ -385,22 +420,15 @@ class TestIdempotenceR33:
     """R33: ``redact(redact(s)) == redact(s)`` for all ``s`` — a property, not a habit."""
 
     @pytest.mark.parametrize("text", ADVERSARIAL_CORPUS, ids=lambda t: repr(t[:32]))
-    def test_r33_the_hand_written_corpus_is_idempotent_where_it_can_be(self, text: str) -> None:
-        """R33: every adversarial case except the three BUG-3 shapes.
+    def test_r33_the_hand_written_corpus_is_idempotent(self, text: str) -> None:
+        """R33: every adversarial case, with no exemptions.
 
-        The exclusions are named individually rather than filtered by a
-        predicate, so a fourth non-idempotent shape appearing later is a failure
-        and not an automatic exemption.
+        The three BUG-3 shapes carried a named exemption here until review fixed
+        them. The exemption list is gone rather than emptied: a list of "cases
+        the property does not hold for" is a check that can be widened, and this
+        is the property R33 pins without qualification.
         """
-        bug3 = {
-            'TOKEN="abcdefg"X',
-            "API_KEY='aaaaaa'Z",
-            "PASSWORD='secret'AKIAIOSFODNN7EXAMPLE",
-        }
         once = redact(text)
-        if text in bug3:
-            assert redact(once) != once, f"BUG-3 appears fixed for {text!r}"
-            return
         assert redact(once) == once
 
     @pytest.mark.parametrize("text", ADVERSARIAL_CORPUS, ids=lambda t: repr(t[:32]))
@@ -437,14 +465,6 @@ class TestIdempotenceR33:
         """R33: the control arm — the corpus above is not all inert strings."""
         assert any("[redacted:" in redact(text) for text in corpus_free_text())
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-3: secret_assignment's `\\S{6,}` value alternative re-matches its own "
-            "output *plus whatever follows it without a space*, so a second pass deletes "
-            "the trailing characters. R33 pins redact(redact(s)) == redact(s) for all s."
-        ),
-    )
     def test_r33_a_generated_corpus_is_idempotent(self) -> None:
         """R33: 40,000 strings from the assignment grammar.
 
@@ -461,32 +481,87 @@ class TestIdempotenceR33:
         """
         assert generated_non_idempotent() == (), list(generated_non_idempotent()[:5])
 
-    def test_r33_bug3_reproduces_on_a_minimal_string(self) -> None:
-        """R33: BUG-3, minimized, pinned beside its xfail.
+    def test_r33_the_minimal_non_idempotent_string_no_longer_loses_a_character(self) -> None:
+        """R33 (BUG-3, fixed in review): the trailing character survives pass two.
 
-        The first pass matches the quoted alternative and yields
-        ``TOKEN=[redacted:secret_assignment]X``. On the second pass the value
-        alternative ``\\S{6,}`` is greedy and unanchored, so it swallows the
-        marker *and* the ``X`` — silently deleting a character of report text.
+        Replaces the reproduction that pinned the deletion. The first pass is
+        asserted **unchanged** as well as the second: the fix had to make the
+        function stable, not merely make it stop redacting.
         """
         once = redact('TOKEN="abcdefg"X')
         assert once == f"TOKEN={marker('secret_assignment')}X"
-        twice = redact(once)
-        assert twice == f"TOKEN={marker('secret_assignment')}"
-        assert twice != once, (
-            "BUG-3 appears to be fixed: delete this test and de-xfail the one above"
-        )
+        assert redact(once) == once
 
-    def test_r33_bug3_can_delete_an_earlier_marker_too(self) -> None:
-        """R33: the second pass can erase evidence, not only trailing text."""
+    def test_r33_a_second_pass_no_longer_erases_an_earlier_marker(self) -> None:
+        """R33: the worse form — a second pass used to destroy evidence.
+
+        ``[redacted:aws_key_id]`` is the record that a credential was found. The
+        old second pass swallowed it into the ``secret_assignment`` marker, so a
+        reader of a twice-redacted report could not tell an AWS key had been
+        there at all.
+        """
         once = redact("PASSWORD='secret'AKIAIOSFODNN7EXAMPLE")
         assert once == f"PASSWORD={marker('secret_assignment')}{marker('aws_key_id')}"
-        assert redact(once) == f"PASSWORD={marker('secret_assignment')}"
+        assert redact(once) == once
+        assert marker("aws_key_id") in redact(once)
+
+    @pytest.mark.parametrize("passes", [2, 3, 8])
+    def test_r33_the_whole_adversarial_corpus_is_stable_under_n_passes(self, passes: int) -> None:
+        """R33: idempotence is a fixed point, not a claim about the second pass.
+
+        A guard that made pass two a no-op while pass three moved again would
+        satisfy the requirement's literal text and still lose bytes, so the
+        corpus is driven to a depth the reported defect never reached.
+        """
+        for text in ADVERSARIAL_CORPUS:
+            once = redact(text)
+            value = once
+            for _ in range(passes - 1):
+                value = redact(value)
+            assert value == once, text
+
+    def test_r33_the_idempotence_guard_still_redacts_a_value_after_a_foreign_marker(self) -> None:
+        """R33: the guard is narrow — it recognises *this* label's marker only.
+
+        The condition that makes ``redact`` a fixed point could have been
+        written as "any ``[redacted:…]`` marker", which would have let a trace
+        containing ``TOKEN=[redacted:aws_key_id]<secret>`` shield the secret
+        behind any label at all. It recognises ``secret_assignment``'s own
+        marker, so a value that merely *starts* with some other label's marker is
+        still redacted — this is the arm that stops the fix widening into a hole.
+        """
+        assert redact(f"TOKEN={marker('aws_key_id')}rest") == f"TOKEN={marker('secret_assignment')}"
+        assert redact("AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE") == (
+            f"AWS_SECRET_ACCESS_KEY={marker('secret_assignment')}"
+        )
+
+    def test_r33_the_guard_does_not_stop_the_redactor_redacting(self) -> None:
+        """R33: the non-vacuous arm — a function returning its input is idempotent.
+
+        The cheapest way to pass every assertion above is to redact nothing, so
+        every label is driven through a live value here and asserted to produce
+        its marker.
+        """
+        for label, _ in REDACTION_PATTERNS:
+            assert any(marker(label) in redact(text) for text in ADVERSARIAL_CORPUS), label
 
     def test_r33_the_generator_can_produce_a_distinguishing_input(self) -> None:
         """R33: the generator's precondition — its space contains the counterexample.
 
         A property test over a generator that cannot emit the failing shape is a
-        check that cannot fail, so the space is shown to reach it.
+        check that cannot fail, so the space is shown to reach it. With BUG-3
+        fixed, ``generated_non_idempotent()`` is empty for the *right* reason,
+        which is indistinguishable from a broken generator — so the premise is
+        re-established against a **deliberately reverted** replacement: the
+        pre-fix behaviour, applied to the same 40,000 strings, must produce
+        counterexamples. If it does not, the generator has drifted and the
+        property test above has quietly stopped proving anything.
         """
-        assert generated_non_idempotent(), "the generator never produced a non-idempotent string"
+        broken = tuple(
+            text
+            for text in generated_corpus(GENERATED_TRIALS, seed=GENERATOR_SEED)
+            if _redact_without_the_idempotence_guard(_redact_without_the_idempotence_guard(text))
+            != _redact_without_the_idempotence_guard(text)
+        )
+        assert broken, "the generator can no longer produce a non-idempotent string"
+        assert generated_non_idempotent() == ()

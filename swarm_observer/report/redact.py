@@ -14,10 +14,15 @@ Two properties are requirements rather than niceties:
   ``openai_key`` is the visible reason — ``sk-ant-…`` would otherwise be split
   by the narrower pattern — but the general reason is that a replacement
   rewrites the string the next pattern sees, so the order is part of the output.
-* **Idempotence.** ``redact(redact(s)) == redact(s)`` for every ``s``. It holds
-  because every replacement is a fixed ``[redacted:<label>]`` literal that no
-  pattern matches, except ``secret_assignment``, which re-matches its own output
-  and reproduces it unchanged. That is asserted as a property, not argued.
+* **Idempotence.** ``redact(redact(s)) == redact(s)`` for every ``s``. Every
+  replacement is a fixed ``[redacted:<label>]`` literal that no pattern matches
+  — except ``secret_assignment``, whose bare ``\\S{6,}`` value alternative
+  re-matches its own marker **and whatever follows it without a space**. It did
+  not reproduce the match unchanged: it swallowed the trailing text, so a second
+  pass deleted report characters and could erase an *earlier* marker, destroying
+  the evidence that a credential had been found there. See
+  :func:`_replace_assignment` for the one condition that fixes it. Asserted as a
+  property over a generated corpus, not argued.
 
 ``secret_assignment`` is the one entry that keeps part of what it matched: R33
 says "the name is preserved, the value replaced", because ``AWS_SECRET_ACCESS_KEY``
@@ -92,6 +97,29 @@ def _replace_assignment(match: re.Match[str]) -> str:
     of the name up to and including the first ``=`` or ``:`` is kept, which
     preserves ``FOO_TOKEN: `` as well as ``FOO_TOKEN=``; the value after it is
     replaced whole.
+
+    **The one condition below is R33's idempotence clause** (review, BUG-3). A
+    value that *already begins with this function's own marker* is left exactly
+    as it was found. Without it, ``TOKEN="abcdefg"X`` redacts once to
+    ``TOKEN=[redacted:secret_assignment]X`` and a second time to
+    ``TOKEN=[redacted:secret_assignment]`` — the bare ``\\S{6,}`` alternative is
+    greedy and unanchored, so it swallows the marker together with the ``X``,
+    silently deleting a character of report text. The worse form is
+    ``PASSWORD='secret'AKIAIOSFODNN7EXAMPLE``, where the second pass erases the
+    ``[redacted:aws_key_id]`` marker the first pass produced and destroys the
+    evidence that a credential was there.
+
+    R33 pins two things about this table — the pattern text, and that ``redact``
+    is idempotent — and they are in tension. The pattern is left verbatim and
+    the fix is in the replacement, which R33 describes only as "the name is
+    preserved, the value replaced": both readings of that sentence keep the
+    name, and only this one keeps it stable under a second pass.
+
+    The cost is stated rather than hidden: a trace that contains the literal
+    text ``NAME=[redacted:secret_assignment]<secret>`` shields that one value.
+    Redaction is a courtesy, not a boundary — an adversary who controls the
+    trace need only avoid a secret-shaped *name*, which costs them nothing — and
+    deleting report text is the worse of the two failures.
     """
     whole = match.group(0)
     name = match.group(1)
@@ -100,6 +128,8 @@ def _replace_assignment(match: re.Match[str]) -> str:
     while separator < len(rest) and rest[separator] not in "=:":
         separator += 1
     kept = rest[: separator + 1]
+    if rest[separator + 1 :].lstrip().startswith(marker(NAME_PRESERVING_LABEL)):
+        return whole
     return f"{name}{kept}{marker(NAME_PRESERVING_LABEL)}"
 
 

@@ -596,15 +596,6 @@ class TestRetryStormR20:
         assert found[0].metrics["errors"] == 6
         assert found[0].severity == "critical"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-1: R20 merges windows that are adjacent but do not overlap. The "
-            "windows [0,10) and [10,20) share no span, so the two three-error "
-            "clusters below are two storms; merge_runs uses `start <= merged[-1][1]` "
-            "on half-open ranges and reports them as one critical six-error run."
-        ),
-    )
     def test_r20_adjacent_but_non_overlapping_windows_are_not_merged(self) -> None:
         """R20: half-open windows [0,10) and [10,20) do not overlap, so they are two storms.
 
@@ -612,9 +603,9 @@ class TestRetryStormR20:
         only qualifying windows start at 0 (covering spans 0-9) and at 10
         (covering spans 10-19); no span is in both. R20 merges *overlapping*
         windows, and these do not overlap, so this is two warnings of three
-        errors each. What is produced is one critical finding claiming six
+        errors each. Before the fix this was one critical finding claiming six
         errors in a run of twenty spans — a density no ten-span window supports,
-        and a severity escalation from warning to critical.
+        and a severity escalation from warning to critical (BUG-1, review B1).
         """
         found = run(STORM, error_run(20, [0, 1, 2, 17, 18, 19]))
         assert len(found) == 2
@@ -627,6 +618,17 @@ class TestRetryStormR20:
         assert merge_runs([(0, 5), (3, 10)]) == [(0, 10)]
         assert merge_runs([(5, 10), (0, 3)]) == [(0, 3), (5, 10)]
         assert merge_runs([(0, 5), (6, 10)]) == [(0, 5), (6, 10)]
+
+    def test_r20_merge_runs_treats_the_ranges_as_half_open(self) -> None:
+        """R20, BUG-1: abutting ranges share no index, so they do not merge.
+
+        Both sides of the one comparison, one index apart, because the whole
+        defect was a `<=` where the ranges are half-open: ``[0, 10)`` ends at
+        index 9 and ``[10, 20)`` begins at index 10.
+        """
+        assert merge_runs([(0, 10), (10, 20)]) == [(0, 10), (10, 20)]
+        assert merge_runs([(0, 10), (9, 20)]) == [(0, 20)]
+        assert merge_runs([(0, 10), (10, 20), (19, 30)]) == [(0, 10), (10, 30)]
 
     @pytest.mark.parametrize(
         ("label", "positions", "expected"),

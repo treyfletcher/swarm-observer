@@ -74,10 +74,18 @@ def error_text(span: Span) -> str:
 
 
 def merge_runs(windows: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Collapse overlapping half-open index ranges into maximal runs (R20)."""
+    """Collapse overlapping half-open index ranges into maximal runs (R20).
+
+    The ranges are **half-open**, so ``[0, 10)`` and ``[10, 20)`` share no span
+    and are two runs, not one. The test is therefore ``start < previous_stop``
+    and not ``<=``: R20 merges *overlapping* windows, and two windows that merely
+    abut have no span in common. Getting this wrong does not lose a finding — it
+    manufactures one, by adding two clusters' error counts together and reporting
+    a density no ten-span window supports.
+    """
     merged: list[tuple[int, int]] = []
     for start, stop in sorted(windows):
-        if merged and start <= merged[-1][1]:
+        if merged and start < merged[-1][1]:
             previous_start, previous_stop = merged[-1]
             merged[-1] = (previous_start, max(previous_stop, stop))
         else:

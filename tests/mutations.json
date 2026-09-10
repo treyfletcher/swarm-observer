@@ -118,7 +118,8 @@
       "operator": "guard-drop",
       "old": "traps=[InvalidOperation, DivisionByZero, Overflow, Inexact],",
       "new": "traps=[InvalidOperation, DivisionByZero, Overflow],",
-      "verdict": "killed"
+      "verdict": "killed",
+      "regression_note": "increment-3 review: this mutant went from KILLED to SURVIVING as a side effect of the review's own BUG-1 fix, and was caught only by re-running the whole checked-in ledger against the fixed tree. Moving quantize_cost inside the guard made InvalidOperation and Inexact indistinguishable for every input the suite drove, so R29's central clause became unfalsifiable. Killed again by test_r29_inexact_is_trapped_and_not_only_invalid_operation. This is the argument for amendment 4 (run the checked-in sweep in CI): a fix can silently disarm a check, and nothing but a re-run says so."
     },
     {
       "id": "C11",

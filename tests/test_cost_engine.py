@@ -480,6 +480,41 @@ class TestInexactTrapR29:
                 price_usage(usage, dict.fromkeys(PRICE_KEYS, Decimal("3")))
             assert caught.value.code == "cost_precision_exceeded"
 
+    def test_r29_inexact_is_trapped_and_not_only_invalid_operation(self) -> None:
+        """R29: "every arithmetic step runs in a context that traps" — ``Inexact`` too.
+
+        Added by review, and it is a **repair to the review's own BUG-1 fix**.
+        Moving ``quantize_cost`` inside the guard was right, but it made the two
+        signals indistinguishable for every input the suite drove: an oversized
+        token count now raises ``InvalidOperation`` from the quantize, is caught,
+        and becomes ``CostError`` — whether or not ``Inexact`` is in
+        ``_EXACT.traps``. Dropping ``Inexact`` from the trap list therefore went
+        from killed to **surviving** the whole suite, which is R29's central
+        clause becoming unfalsifiable as a side effect of a fix.
+
+        This is the input that separates them: a rate with 60 significant digits
+        times an 11-token count needs 61 digits for the **product**, so the
+        multiply rounds — while the rounded result quantizes to six places
+        without complaint. Trapped, it is a ``CostError``; untrapped, it is a
+        silently rounded dollar figure, which is exactly the thing R29 exists to
+        forbid.
+        """
+        rate = Decimal("1." + "1" * 59)
+        assert len(rate.as_tuple().digits) == COST_PRECISION
+        with pytest.raises(CostError) as caught:
+            price_usage(TokenUsage(input_tokens=11), {"input": rate})
+        assert caught.value.code == "cost_precision_exceeded"
+
+    def test_r29_the_same_rate_prices_exactly_when_the_product_fits(self) -> None:
+        """R29: the non-vacuous arm — a 60-digit rate is not refused by itself.
+
+        Seven tokens against the same rate is an exact 60-digit product, so it
+        prices. Without this, the test above is satisfied by a guard that refuses
+        any rate with many digits, which is not what R29 says.
+        """
+        rate = Decimal("1." + "1" * 59)
+        assert price_usage(TokenUsage(input_tokens=7), {"input": rate}) >= 0
+
     def test_r29_the_oversize_boundary_still_prices_one_digit_lower(self) -> None:
         """R29: the non-vacuous arm — the guard does not fire on the value below.
 

@@ -48,9 +48,17 @@ REQUIRED_CANARIES: dict[str, int] = {
     # certain canaries to exist and does not forbid others (increment-1 review,
     # tension 1), and a debt written down is the only kind that gets paid.
     "metrics_redaction_dropped": 4,
+    # Increment 3 note for the tester: ``report/redact.py`` (R33) landed early,
+    # because R30 requires the unpriced table's recorded model id to be redacted
+    # and ``report/json_out.py`` cannot honestly write trace text without it.
+    # Its subject therefore exists *now*, so ``redaction_pattern_removed`` can
+    # move from 4 to 3 as soon as somebody writes the canary. It is left at 4
+    # rather than moved by the coder, because moving it without writing the
+    # canary would fail this ledger on the next run — the debt is real either
+    # way and this is where it is recorded.
 }
 
-CURRENT_INCREMENT = 2
+CURRENT_INCREMENT = 3
 
 
 def all_test_modules() -> list[str]:

@@ -15,6 +15,13 @@
 #
 # Cited as of increment 2: R1-R25, R38 (schema subcommand), R44, R45, R48,
 # R49, R50, R52 — deleted below by the tester as each gained a test.
+#
+# Increment 3 (coder): R39 leaves the ledger because
+# tests/test_model_schema.py's unknown-subcommand case now asserts one of its
+# clauses for real — a usage error is exit 3, one line, no traceback. That is a
+# citation, not coverage: R39's other four clauses (exit 0, exit 1 via
+# --fail-on, exit 2 fail-closed, and --explain never changing the code) are the
+# increment-3 tester's, and so are R26-R31, R36's JSON half and R38/R40.
 
 R26
 R27
@@ -28,7 +35,6 @@ R34
 R35
 R36
 R37
-R39
 R40
 R41
 R42

@@ -43,7 +43,12 @@ from swarm_observer.detect.anomalous_span import (
     POPULATION_FLOOR,
     mad_of,
 )
-from swarm_observer.detect.base import DetectorConfig, Finding, lower_median
+from swarm_observer.detect.base import (
+    DetectorConfig,
+    Finding,
+    first_tool_call_by_parent,
+    lower_median,
+)
 from swarm_observer.detect.blocked_agent import (
     COVERAGE_DENOMINATOR,
     COVERAGE_NUMERATOR,
@@ -482,6 +487,52 @@ class TestAgentLoopFiringR19:
             builder.tool_call(parent=call, tool_name="Bash", digest=DIGEST_A)
             builder.tool_call(parent=call, tool_name="Read", digest=DIGEST_B)
         assert len(run(LOOP, builder.build())) == 1
+
+    def test_r19_first_and_last_emitted_tool_calls_give_different_answers(self) -> None:
+        """R19: "*first* emitted ``tool_call``", where first and last disagree.
+
+        The case above cannot tell the two apart — every model call emits the
+        same pair, so the first and the last are both constant and both make a
+        loop. Here the first tool call is the same every turn and the second is
+        different every turn: reading the first finds a period-1 loop, reading
+        the last finds nothing at all. Without this pair, replacing
+        ``setdefault`` with an assignment in ``first_tool_call_by_parent``
+        leaves the whole suite green (reviewer's mutation sweep).
+        """
+        builder = TraceBuilder()
+        for tail in ("Bash", "Grep", "Write"):
+            call = builder.model_call()
+            builder.tool_call(parent=call, tool_name="Read", digest=DIGEST_A)
+            builder.tool_call(parent=call, tool_name=tail, digest=DIGEST_B)
+        trace = builder.build()
+
+        by_parent = first_tool_call_by_parent(trace)
+        assert [span.tool_name for span in by_parent.values()] == ["Read", "Read", "Read"]
+
+        found = run(LOOP, trace)
+        assert len(found) == 1
+        assert found[0].metrics["period"] == 1
+        assert found[0].metrics["repeats"] == 3
+
+    def test_r19_only_tool_calls_are_a_model_calls_emitted_tool_call(self) -> None:
+        """R19: a span that is not a ``tool_call`` is not one, whatever its parent.
+
+        R12 gives ``parent_span_id`` only to ``tool_call`` spans, so the kind
+        check in ``first_tool_call_by_parent`` is unreachable through today's
+        adapter — which is exactly why it is worth an assertion rather than a
+        comment. A v2 source (R3 is the seam) that parents a message to its
+        model call would otherwise silently become that call's "tool".
+        """
+        builder = TraceBuilder()
+        for _ in range(3):
+            call = builder.model_call()
+            message = builder.user_message()
+            builder.replace(message, parent_span_id=call.span_id)
+        trace = builder.build()
+        assert first_tool_call_by_parent(trace) == {}
+        found = run(LOOP, trace)
+        assert len(found) == 1
+        assert found[0].metrics["period"] == 1, "three text-only calls are a period-1 loop"
 
     def test_r19_text_only_model_calls_form_a_loop(self) -> None:
         """R19: three model calls emitting no tools share the ``("text",)`` signature."""

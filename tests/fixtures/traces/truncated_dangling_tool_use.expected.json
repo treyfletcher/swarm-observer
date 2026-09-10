@@ -1,0 +1,61 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "unresolved_tool_call:487bf41b0a61",
+          "metrics": {
+            "occurrences": 1,
+            "reason": "no_result",
+            "tool_name": "Read"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            2
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    }
+  },
+  "fixture": "truncated_dangling_tool_use.jsonl",
+  "purpose": "AC9: a mid-trace unmatched tool_use and a trailing one. Only the mid-trace span fires; the trailing one is R22's carve-out and is counted as dangling_tool_use.",
+  "trace": {
+    "agents": 1,
+    "spans": 7,
+    "trace_id": "12b3ac91b6af3f43",
+    "warnings": {
+      "dangling_tool_use": 1,
+      "unknown_extra_key": 17
+    }
+  }
+}

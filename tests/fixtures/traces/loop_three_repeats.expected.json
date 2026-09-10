@@ -1,0 +1,120 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "agent_loop:026ac4c1c74a",
+          "metrics": {
+            "end_seq": 11,
+            "period": 2,
+            "repeats": 3,
+            "start_seq": 1
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            1,
+            3,
+            5,
+            7,
+            9,
+            11
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 200,
+            "input_tokens": 200,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "repeated_tool_call:0e45a5ae2f33",
+          "metrics": {
+            "first_seq": 2,
+            "last_seq": 10,
+            "occurrences": 3,
+            "tool_name": "Bash"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            2,
+            6,
+            10
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 100,
+            "input_tokens": 100,
+            "output_tokens": 0
+          }
+        },
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "repeated_tool_call:d6573de68538",
+          "metrics": {
+            "first_seq": 4,
+            "last_seq": 12,
+            "occurrences": 3,
+            "tool_name": "Read"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            4,
+            8,
+            12
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 100,
+            "input_tokens": 100,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "loop_three_repeats.jsonl",
+  "purpose": "AC8's shape: A B A B A B C fires exactly one period-2, three-repeat finding (warning) at the first A.",
+  "trace": {
+    "agents": 1,
+    "spans": 14,
+    "trace_id": "a96890cd4827a9a9",
+    "warnings": {
+      "unknown_extra_key": 49
+    }
+  }
+}

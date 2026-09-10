@@ -1,0 +1,36 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "outlier_below_floors.jsonl",
+  "purpose": "R24's absolute floors from below: 9,999 tokens and 29,999 ms both clear their 6*MAD thresholds and both stay under the floor, so neither fires.",
+  "trace": {
+    "agents": 1,
+    "spans": 17,
+    "trace_id": "99b4a6494d29ed5e",
+    "warnings": {
+      "known_ignored_key:apiBlockIndex": 16,
+      "unknown_extra_key": 84
+    }
+  }
+}

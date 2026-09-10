@@ -1,0 +1,61 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "failed_tool_call:3e64bb520c02",
+          "metrics": {
+            "failures": 2,
+            "first_seq": 2,
+            "tool_name": "Bash"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            2,
+            6
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "failed_tool_twice.jsonl",
+  "purpose": "R21's info/warning boundary from above: one tool failing exactly twice for one agent. Two error spans total, so R20 stays silent.",
+  "trace": {
+    "agents": 1,
+    "spans": 8,
+    "trace_id": "297334b6b1cc3bc7",
+    "warnings": {
+      "unknown_extra_key": 28
+    }
+  }
+}

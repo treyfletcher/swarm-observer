@@ -1,0 +1,93 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "agent_loop:b0ce41c53d5e",
+          "metrics": {
+            "end_seq": 7,
+            "period": 1,
+            "repeats": 4,
+            "start_seq": 1
+          },
+          "previews_count": 1,
+          "severity": "critical",
+          "span_seqs": [
+            1,
+            3,
+            5,
+            7
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 150,
+            "input_tokens": 150,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "repeated_tool_call:9bbfeee8c1df",
+          "metrics": {
+            "first_seq": 2,
+            "last_seq": 8,
+            "occurrences": 4,
+            "tool_name": "Bash"
+          },
+          "previews_count": 1,
+          "severity": "critical",
+          "span_seqs": [
+            2,
+            4,
+            6,
+            8
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 150,
+            "input_tokens": 150,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "loop_four_repeats.jsonl",
+  "purpose": "R19 at four repeats of a period-1 cycle: critical, and the detector reports one finding rather than one per start index.",
+  "trace": {
+    "agents": 1,
+    "spans": 10,
+    "trace_id": "83b258e99cb0667f",
+    "warnings": {
+      "unknown_extra_key": 35
+    }
+  }
+}

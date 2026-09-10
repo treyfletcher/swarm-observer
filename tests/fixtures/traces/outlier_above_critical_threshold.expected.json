@@ -1,0 +1,62 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "anomalous_span:5f821524f507",
+          "metrics": {
+            "dimension": "tokens",
+            "mad": 2000,
+            "median": 4000,
+            "seq": 15,
+            "value": 29000
+          },
+          "previews_count": 1,
+          "severity": "critical",
+          "span_seqs": [
+            15
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "outlier_above_critical_threshold.jsonl",
+  "purpose": "R24's 12*MAD critical threshold from above: the same population with the outlier at 29,000. Critical. The pair brackets the constant, so moving it in either direction changes a severity the corpus has pinned.",
+  "trace": {
+    "agents": 1,
+    "spans": 17,
+    "trace_id": "2927565e9b689f28",
+    "warnings": {
+      "unknown_extra_key": 60
+    }
+  }
+}

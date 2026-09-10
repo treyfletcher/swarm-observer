@@ -1,0 +1,62 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "blocked_agent:4b62e328afdc",
+          "metrics": {
+            "after_seq": 4,
+            "before_seq": 2,
+            "gap_seconds": 120
+          },
+          "previews_count": 0,
+          "severity": "warning",
+          "span_seqs": [
+            2,
+            4
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "gaps_partly_explained.jsonl",
+  "purpose": "R23's 50% coverage rule pinned away from any looser one: a 120 s gap with 48 s (40%) of subagent work fires. A rule at a third of the gap would call it explained.",
+  "trace": {
+    "agents": 2,
+    "spans": 5,
+    "trace_id": "a468d6299a8a1b72",
+    "warnings": {
+      "known_ignored_key:apiBlockIndex": 2,
+      "unknown_extra_key": 20
+    }
+  }
+}

@@ -36,7 +36,7 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -212,6 +212,38 @@ class Detector(Protocol):
 
     def run(self, trace: Trace, config: DetectorConfig) -> tuple[Finding, ...]:
         """Every finding this detector makes about ``trace``."""
+        ...
+
+
+@runtime_checkable
+class WasteAttributor(Protocol):
+    """A detector that can say *which* model calls it attributed waste to (R17, R29).
+
+    R17 defines ``Finding.wasted`` as the element-wise sum of ``Span.usage``
+    over "the distinct ``model_call`` spans named by that detector as
+    redundant", and R29 defines a finding's ``wasted_cost_usd`` as "the sum of
+    already-quantized span costs". Those two sentences need the *span list*, and
+    R14's ``Finding`` has no field for it — a summed ``TokenUsage`` has lost
+    which model produced each token, so a trace mixing a Haiku subagent with a
+    Sonnet orchestrator cannot be priced from it at all.
+
+    Rather than add a field R14 does not declare, a detector with a redundancy
+    notion implements this protocol: one scan produces the findings *and* their
+    attributions, so the two can never drift. ``run`` is then that scan's
+    findings, sorted. A detector R18-R24 gives no redundancy notion — R21, R23,
+    R24 — implements nothing and attributes nothing, which is exactly what
+    "emit a zero ``TokenUsage``" means for cost.
+
+    The seqs are the *raw* attribution, before R17's "distinct ``model_call``
+    with usage" filter; :func:`attribute_waste` applies that filter to produce
+    the tokens and the cost engine applies the same one to produce the money, so
+    a finding can never report tokens it has no cost for.
+    """
+
+    def scan_with_waste(
+        self, trace: Trace, config: DetectorConfig
+    ) -> tuple[tuple[Finding, tuple[int, ...]], ...]:
+        """Each finding with the ``seq`` values of the model calls it attributed."""
         ...
 
 
@@ -462,6 +494,7 @@ __all__ = [
     "DetectorConfig",
     "Finding",
     "Severity",
+    "WasteAttributor",
     "agent_order",
     "attribute_waste",
     "build_finding",

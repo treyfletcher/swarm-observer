@@ -134,7 +134,13 @@ class RetryStorm:
 
     def run(self, trace: Trace, config: DetectorConfig) -> tuple[Finding, ...]:
         """Slide a ten-span window over each agent and merge what qualifies (R20)."""
-        findings: list[Finding] = []
+        return sort_findings(finding for finding, _ in self.scan_with_waste(trace, config))
+
+    def scan_with_waste(
+        self, trace: Trace, config: DetectorConfig
+    ) -> tuple[tuple[Finding, tuple[int, ...]], ...]:
+        """R20's findings, each with the model calls it attributed (R17, R29)."""
+        found: list[tuple[Finding, tuple[int, ...]]] = []
         for agent_id, spans in spans_by_agent(trace).items():
             kinds = [error_kind(span) or "" for span in spans]
             error_positions = [index for index, kind in enumerate(kinds) if kind]
@@ -155,31 +161,29 @@ class RetryStorm:
                 severity: Severity = (
                     "critical" if len(inside) >= CRITICAL_ERRORS else self.default_severity
                 )
-                findings.append(
-                    build_finding(
-                        trace=trace,
-                        detector=self.slug,
-                        severity=severity,
-                        summary=(
-                            f"{len(inside)} errors within a run of {len(run)} spans "
-                            f"(spans {run[0].seq}-{run[-1].seq}, kinds: {kind})"
-                        ),
-                        metrics={
-                            "end_seq": run[-1].seq,
-                            "errors": len(inside),
-                            "kinds": kind,
-                            "start_seq": run[0].seq,
-                            "window_spans": len(run),
-                        },
-                        span_seqs=[spans[position].seq for position in inside],
-                        agent_ids=[agent_id],
-                        previews=[error_text(spans[position]) for position in inside],
-                        wasted=attribute_waste(
-                            trace, [span.seq for span in run if span.kind == "model_call"]
-                        ),
-                    )
+                redundant = tuple(span.seq for span in run if span.kind == "model_call")
+                finding = build_finding(
+                    trace=trace,
+                    detector=self.slug,
+                    severity=severity,
+                    summary=(
+                        f"{len(inside)} errors within a run of {len(run)} spans "
+                        f"(spans {run[0].seq}-{run[-1].seq}, kinds: {kind})"
+                    ),
+                    metrics={
+                        "end_seq": run[-1].seq,
+                        "errors": len(inside),
+                        "kinds": kind,
+                        "start_seq": run[0].seq,
+                        "window_spans": len(run),
+                    },
+                    span_seqs=[spans[position].seq for position in inside],
+                    agent_ids=[agent_id],
+                    previews=[error_text(spans[position]) for position in inside],
+                    wasted=attribute_waste(trace, redundant),
                 )
-        return sort_findings(findings)
+                found.append((finding, redundant))
+        return tuple(found)
 
 
 #: The registered instance (R13, R48).

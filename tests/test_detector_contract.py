@@ -68,6 +68,7 @@ from .synthetic_traces import (
     SYNTHETIC_TRACE_ID,
     TraceBuilder,
     at,
+    at_micros,
     hex_id,
     tokens,
 )
@@ -839,6 +840,45 @@ class TestSharedTraceViewsR17:
         assert millis_between(at(0), at(1)) == 1
         assert millis_between(at(1_000), at(0)) == -1_000
         assert millis_between(at(0), at(86_400_000 * 3 + 7)) == 86_400_000 * 3 + 7
+
+    @pytest.mark.parametrize(
+        ("micros", "expected"),
+        [
+            (0, 0),
+            (999, 0),
+            (1_000, 1),
+            (1_999, 1),
+            (59_999_001, 59_999),
+            (59_999_999, 59_999),
+            (60_000_000, 60_000),
+            (60_000_999, 60_000),
+        ],
+    )
+    def test_r23_millis_between_truncates_a_sub_millisecond_remainder(
+        self, micros: int, expected: int
+    ) -> None:
+        """R23, R24: whole milliseconds *down*, never rounded to the nearest.
+
+        Every timestamp any other test uses lands on a whole millisecond, so
+        replacing ``microseconds // 1_000`` with ``round(microseconds / 1_000)``
+        left the whole suite green (reviewer's mutation sweep) — and the two
+        disagree at ``60_000_999`` microseconds, which under rounding becomes
+        60,001 ms and clears R23's default 60-second threshold that truncation
+        leaves it one millisecond short of.
+
+        Rounding would also put a float division into the one arithmetic path
+        R23 and R24 both say is integral.
+        """
+        assert millis_between(at_micros(0), at_micros(micros)) == expected
+
+    def test_r23_a_gap_a_microsecond_under_the_threshold_does_not_fire(self) -> None:
+        """R23: the truncation is visible through the detector, not only in the helper."""
+        builder = TraceBuilder()
+        first = builder.model_call()
+        second = builder.model_call()
+        builder.replace(first, start=at_micros(0), end=at_micros(0))
+        builder.replace(second, start=at_micros(59_999_999), end=at_micros(59_999_999))
+        assert detector_by_slug("blocked_agent").run(builder.build(), DetectorConfig()) == ()
 
     def test_r24_span_duration_clamps_a_negative_duration_to_zero(self) -> None:
         """R24: a span whose ``end`` precedes its ``start`` measures zero, not a negative.

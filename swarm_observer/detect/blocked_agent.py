@@ -16,6 +16,7 @@ explain thirty seconds of the gap, not sixty.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from itertools import pairwise
 
@@ -41,6 +42,61 @@ COVERAGE_NUMERATOR = 1
 COVERAGE_DENOMINATOR = 2
 
 
+class CoverageIndex:
+    """The union of a set of intervals, answered for any window in log time (R23).
+
+    The union rule has exactly one implementation and this is it —
+    :func:`covered_millis` is a thin call onto this class, so the helper the
+    tests drive and the structure the detector uses cannot drift apart.
+
+    Built once, queried many times. That is the whole point: ``blocked_agent``
+    asks the same question of the same other-agent intervals once per gap, and
+    re-clipping and re-sorting the entire interval list per gap is what made the
+    detector quadratic in spans (BUG-3). Here the intervals are clipped-free:
+    they are unioned once at construction into disjoint ascending runs with a
+    prefix sum, and a window query is two binary searches plus arithmetic on
+    the two partially-covered ends.
+
+    Integer milliseconds throughout, and the terms summed are the same terms the
+    clip-then-union form summed: the union of the clipped intervals is the clip
+    of the union, so an interior run contributes its whole (already integral)
+    length and only the two boundary runs are measured against the window.
+    """
+
+    def __init__(self, intervals: Sequence[tuple[UtcDatetime, UtcDatetime]]) -> None:
+        merged: list[tuple[UtcDatetime, UtcDatetime]] = []
+        for start, end in sorted(interval for interval in intervals if interval[1] > interval[0]):
+            if merged and start <= merged[-1][1]:
+                previous_start, previous_end = merged[-1]
+                merged[-1] = (previous_start, max(previous_end, end))
+            else:
+                merged.append((start, end))
+        self._starts = [start for start, _ in merged]
+        self._ends = [end for _, end in merged]
+        self._prefix = [0]
+        for start, end in merged:
+            self._prefix.append(self._prefix[-1] + millis_between(start, end))
+
+    def covered(self, window_start: UtcDatetime, window_end: UtcDatetime) -> int:
+        """The milliseconds of ``[window_start, window_end]`` this union covers."""
+        if window_end <= window_start or not self._starts:
+            return 0
+        # The first run that reaches into the window, and the first that starts
+        # after it ends.
+        first = bisect_right(self._ends, window_start)
+        limit = bisect_left(self._starts, window_end)
+        if first >= limit:
+            return 0
+        if limit - first == 1:
+            return millis_between(
+                max(self._starts[first], window_start), min(self._ends[first], window_end)
+            )
+        total = self._prefix[limit - 1] - self._prefix[first + 1]
+        total += millis_between(max(self._starts[first], window_start), self._ends[first])
+        total += millis_between(self._starts[limit - 1], min(self._ends[limit - 1], window_end))
+        return total
+
+
 def covered_millis(
     intervals: Sequence[tuple[UtcDatetime, UtcDatetime]],
     window_start: UtcDatetime,
@@ -51,26 +107,7 @@ def covered_millis(
     Overlapping intervals are unioned before they are measured, so concurrent
     agents cannot explain more of a gap than the gap contains.
     """
-    clipped: list[tuple[UtcDatetime, UtcDatetime]] = []
-    for start, end in intervals:
-        low = max(start, window_start)
-        high = min(end, window_end)
-        if high > low:
-            clipped.append((low, high))
-    total = 0
-    current_start: UtcDatetime | None = None
-    current_end: UtcDatetime | None = None
-    for start, end in sorted(clipped):
-        if current_end is None or current_start is None:
-            current_start, current_end = start, end
-        elif start <= current_end:
-            current_end = max(current_end, end)
-        else:
-            total += millis_between(current_start, current_end)
-            current_start, current_end = start, end
-    if current_start is not None and current_end is not None:
-        total += millis_between(current_start, current_end)
-    return total
+    return CoverageIndex(intervals).covered(window_start, window_end)
 
 
 class BlockedAgent:
@@ -86,14 +123,14 @@ class BlockedAgent:
         threshold_ms = config.blocked_gap_seconds * 1_000
         findings: list[Finding] = []
         for agent_id, spans in by_agent.items():
-            others = self._other_intervals(by_agent, agent_id)
+            others = CoverageIndex(self._other_intervals(by_agent, agent_id))
             for previous, following in pairwise(spans):
                 if previous.end is None or following.start is None:
                     continue
                 gap_ms = max(0, millis_between(previous.end, following.start))
                 if gap_ms < threshold_ms:
                     continue
-                covered = covered_millis(others, previous.end, following.start)
+                covered = others.covered(previous.end, following.start)
                 if covered * COVERAGE_DENOMINATOR >= gap_ms * COVERAGE_NUMERATOR:
                     continue  # explained: other agents were working through it
                 gap_seconds = gap_ms // 1_000
@@ -143,5 +180,6 @@ __all__ = [
     "CRITICAL_GAP_SECONDS",
     "DETECTOR",
     "BlockedAgent",
+    "CoverageIndex",
     "covered_millis",
 ]

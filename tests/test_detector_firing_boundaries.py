@@ -48,6 +48,7 @@ from swarm_observer.detect.blocked_agent import (
     COVERAGE_DENOMINATOR,
     COVERAGE_NUMERATOR,
     CRITICAL_GAP_SECONDS,
+    CoverageIndex,
     covered_millis,
 )
 from swarm_observer.detect.failed_tool_call import WARNING_FAILURES
@@ -76,6 +77,7 @@ from .synthetic_traces import (
     DIGEST_B,
     TraceBuilder,
     at,
+    at_micros,
     duration_population,
     error_run,
     hex_id,
@@ -1227,6 +1229,45 @@ class TestBlockedAgentR23:
     def test_r23_a_zero_length_interval_covers_nothing(self) -> None:
         """R23: an instantaneous span explains no part of a gap."""
         assert covered_millis([(at(100), at(100))], at(0), at(1_000)) == 0
+
+    def test_r23_the_coverage_index_answers_exactly_what_a_fresh_union_would(self) -> None:
+        """R23, BUG-3: one index queried many times equals one union built per query.
+
+        ``blocked_agent`` used to rebuild the whole clip-sort-union for every gap
+        it measured, which is what made it quadratic. The index is built once per
+        agent and asked per gap, so the property that matters is that the two
+        forms agree — including at the ends of a window, where one form clips
+        before unioning and the other unions before clipping.
+
+        The intervals carry microsecond components on purpose: the union sums
+        whole milliseconds (R23), so a form that truncated at a different point
+        would disagree here and nowhere else.
+        """
+        rnd = random.Random(20260911)
+        for _ in range(3_000):
+            intervals = []
+            for _ in range(rnd.randint(0, 6)):
+                low = rnd.randrange(0, 200_000)
+                intervals.append((at_micros(low), at_micros(low + rnd.randrange(0, 60_000))))
+            index = CoverageIndex(intervals)
+            for _ in range(3):
+                window_start = at_micros(rnd.randrange(0, 200_000))
+                window_end = at_micros(rnd.randrange(0, 260_000))
+                assert index.covered(window_start, window_end) == covered_millis(
+                    intervals, window_start, window_end
+                ), (intervals, window_start, window_end)
+
+    def test_r23_the_coverage_index_is_not_consumed_by_a_query(self) -> None:
+        """R23: the same index answers the same window the same way, every time.
+
+        The defect this guards is the shape a "build once, query many" rewrite
+        invites: an index that mutates its own state as it walks. Two identical
+        queries either side of a different one must agree.
+        """
+        index = CoverageIndex([(at(0), at(500)), (at(600), at(900))])
+        first = index.covered(at(0), at(1_000))
+        index.covered(at(700), at(800))
+        assert index.covered(at(0), at(1_000)) == first == 800
 
     def test_r23_a_pair_with_a_missing_endpoint_is_skipped(self) -> None:
         """R23: "where both ``prev.end`` and ``next.start`` are non-null"."""

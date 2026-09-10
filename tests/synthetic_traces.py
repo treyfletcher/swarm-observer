@@ -59,6 +59,16 @@ def at(millis: int) -> datetime:
     return EPOCH + timedelta(milliseconds=millis)
 
 
+def at_micros(micros: int) -> datetime:
+    """``micros`` microseconds after :data:`EPOCH`, timezone-aware and UTC.
+
+    R23 and R24 sum whole milliseconds, so a sub-millisecond component is the
+    only input that can tell truncation apart from rounding, or one truncation
+    point apart from another.
+    """
+    return EPOCH + timedelta(microseconds=micros)
+
+
 def hex_id(number: int) -> str:
     """A 16-hex-character id built from ``number`` (R2's ``HEX_ID_PATTERN``)."""
     return f"{number:016x}"

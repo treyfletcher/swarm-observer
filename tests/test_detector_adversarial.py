@@ -534,22 +534,16 @@ class TestScaleR13:
             f"({small:.3f}s -> {large:.3f}s); linear would be ~4x"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-3: blocked_agent re-clips and re-sorts every other agent's "
-            "intervals for every gap it measures, so a two-agent trace costs "
-            "O(gaps x spans). Quadrupling the span count multiplies the time by "
-            "~16 rather than by ~4."
-        ),
-    )
     def test_r23_blocked_agent_does_not_grow_quadratically(self) -> None:
-        """R23: the coverage union should not be rebuilt from scratch for every gap.
+        """R23: the coverage union is not rebuilt from scratch for every gap (BUG-3).
 
         Two agents that alternate, every gap over the threshold and unexplained
-        — a long orchestrator/subagent session with slow turns. ``_other_intervals``
-        is built once per agent, but ``covered_millis`` clips and sorts the whole
-        list again for each of the agent's gaps.
+        — a long orchestrator/subagent session with slow turns. The union of the
+        other agents' intervals is now built once per agent and queried per gap,
+        rather than clipped and sorted afresh for each of them.
+
+        Same pair of bounds as the R20 pin: the quadratic form took 8.3 s on the
+        10,000-span case and the indexed form takes about 0.24 s.
         """
         from swarm_observer.detect.registry import detector_by_slug
 
@@ -568,8 +562,12 @@ class TestScaleR13:
                 )
             return builder.build()
 
-        small = self._time(blocked, alternating(625))
-        large = self._time(blocked, alternating(2_500))
+        small = max(self._time(blocked, alternating(1_250)), 1e-4)
+        large = self._time(blocked, alternating(5_000))
+        assert large < 2.0, (
+            f"10,000 spans took {large:.2f}s; the quadratic form took ~8.3s "
+            "and the indexed form takes ~0.24s"
+        )
         assert large < small * 8.0, (
             f"4x the spans cost {large / small:.1f}x the time "
             f"({small:.3f}s -> {large:.3f}s); linear would be ~4x"

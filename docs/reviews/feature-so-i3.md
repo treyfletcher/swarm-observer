@@ -544,10 +544,234 @@ being restated changes a historical number; this changes today's.
 
 ## 7. My own mutation wave (wave 3)
 
-*(filled in below)*
+### 7.1 Design
+
+The tester's question was whether wave 2's pattern — a module swept once,
+thoroughly, still holding sixteen unasserted behaviours — is exhausted. It is
+not.
+
+**59 mutants**, over anchors **neither prior wave touched**, chosen by mapping
+each wave's anchors onto source lines and then reading what was left:
+
+| module | wave-1+2 mutants | lines touched | wave 3 |
+| --- | ---: | ---: | ---: |
+| `cost/source.py` — snapshot validators, `source_for`, `rates_for` | 26 | 22 of 326 | 8 |
+| `detect/base.py` — `Finding` validators, `attribute_waste`, `spans_by_agent`, `lower_median` | 24 | 20 of 511 | 14 |
+| `cli/main.py` — the review's new code plus untouched decisions | 38 | 35 of 495 | 10 |
+| `report/json_out.py` — timestamps, `severity_counts`, the `identifier` boundary | 38 | 37 of 523 | 9 |
+| `cost/compute.py` — the review's new code, `missing_price_keys`, `_by_agent` | 46 | 42 of 648 | 8 |
+| `report/redact.py` — the review's new idempotence guard | 18 | 18 of 158 | 4 |
+| `detect/registry.py` | 9 | 8 of 138 | 3 |
+| `cost/snapshot.py` | 16 | 12 of 149 | 2 |
+| `ingest/reader.py` — **swept by no wave at all** | 0 | 0 | 1 |
+
+One deliberate choice worth naming: **every line my own fix commits added got a
+mutant.** A fix is unswept code, and the increment-2 ruling about self-chosen
+sets applies hardest to a reviewer who has just written something.
+
+Operators: relational flip, integer ±1, boolean-connective swap, guard-clause
+drop, negation, membership flip, quantifier swap (`any`↔`all`), boundary
+off-by-one, normalization drop (`sorted`/`set`/`tuple`), set-operand swap,
+container-default swap (`setdefault`↔assignment), control-flow swap,
+early-return removal, call-argument swap, literal substitution, exception-clause
+narrowing, guard-scope change.
+
+### 7.2 Results
+
+**59 mutants · 54 killed · 5 survived · 0 unapplied**, against the branch as
+handed to me. Run serially, one interpreter at a time, per the tester's own
+harness contract.
+
+Re-checked at the final commit against the finished suite, on **both**
+interpreters, over the two prior waves' survivors plus wave 3's: `W-C11`,
+`R-C07` and `R-J09` are killed; `S11`, `W-M11-CONTROL`, `R-S02` and `R-R02`
+survive. **The two interpreters name the same four**, which is also the
+confirmation that nothing in this branch's new code depends on a
+Unicode-table-versioned predicate or a recursion limit.
+
+**Three of the five survivors were real gaps. All three are now closed.**
+
+| id | subject | verdict |
+| --- | --- | --- |
+| **R-C07** | `sorted()` dropped from `_by_model` | **REAL** — now killed |
+| **R-M07** | `except (OSError, ValueError)` narrowed in `expand_inputs` | **REAL** — dead code, deleted |
+| **R-J09** | `wasted_unpriced` rendered from `row.wasted` | **REAL** — now killed |
+| R-S02 | `len(set(x)) != len(x)` → `< len(x)` | equivalent by construction |
+| R-R02 | `waste[id] = ()` → `setdefault` | equivalent in practice, **not proven** |
+
+**R-C07 is the finding of the wave, and it is a fixture defect wearing a
+mutation's clothes.** R31 pins `by_model` as "ordered by key" and R47 forbids
+"any `set`/`dict` iteration that is not explicitly sorted". Dropping the
+`sorted()` survived the entire 2,077-test suite — including the R47 determinism
+matrix, which exists to catch precisely this. The reason: **no fixture in the
+corpus resolves more than one model key.** `max(len(report.by_model))` over all
+26 fixtures is **1**, and with one element every ordering is sorted. This is
+the tester's own "collection of one" theme one level up — not in a test, but in
+the corpus every determinism test runs on.
+
+The fix has a subtlety worth recording. Asserting the ordering **in-process**
+would pass or fail depending on the `PYTHONHASHSEED` the session happened to
+get: a test that kills the mutant for some seeds and reports green for the
+others is this project's signature defect with a random number attached. So
+`TestMultiModelOrderingR31R47` asserts in **subprocesses under fixed seeds**,
+with six model keys, plus byte-identity across four seed settings.
+
+**R-M07 is the one I am least comfortable about, because it is mine.** The
+`except (OSError, ValueError)` I wrote into `expand_inputs` during the BUG-7 fix
+is dead code: `Path.is_dir()` swallows `ValueError` and answers `False`, so
+nothing can reach the clause — the whole suite passes with it removed. A guard
+structurally unable to fire, written inside the fix for a class of guards
+structurally unable to fire. It is deleted, and the interpreter behaviour the
+deletion relies on is now pinned rather than assumed. Two of the three real
+gaps this wave found were in code I had written hours earlier, which is the
+argument for sweeping a fix and not only the thing it fixed.
+
+### 7.3 The two equivalence claims
+
+**`S11` — `@lru_cache(maxsize=1)` → `maxsize=2` on `bundled_snapshot`.
+UPHELD.** The function is nullary, so the cache is keyed on nothing and both
+sizes hold the same single entry forever. Reproduced on a clean tree.
+
+One refinement to the claim as written: it is **not undetectable, only
+untested.** `cache_info().maxsize` is public and distinguishes them. Pinning it
+would pin an implementation detail with no behavioural content, so the tester's
+premise test — nullary signature, `currsize` stays 1 — is the right mitigation
+and this stays a declared equivalent. Recorded because "no test can distinguish
+them" is a stronger claim than the evidence supports, and the difference between
+"equivalent" and "not worth testing" is exactly what the increment-2 ruling was
+about.
+
+**`W-C11` — dropping `compute_costs`'s waste-key validation loop.
+OVERTURNED. It is not equivalent, and I have killed it.**
+
+The claim: with the loop gone every malformed key still raises the identical
+`ValueError`, because `_by_detector` calls `_detector_of` on every key anyway.
+That is true for every input the sweep tried and false in general. **The loop
+runs before any span is priced; `_by_detector` runs after.** So a trace that
+raises during pricing changes which error a caller sees:
+
+```
+trace with a 10**60-token span AND waste_seqs={"NOT A FINDING ID": (0,)}
+
+  shipped:  ValueError('NOT A FINDING ID' is not a finding id)
+  mutant:   CostError(cost_precision_exceeded: span 0)
+```
+
+Two different R11 stderr lines and, since the review's floor commit, two
+different diagnostics from one input. The contract the loop encodes — *a
+malformed waste key is refused before any work is done* — is real, and it is
+now pinned by
+`test_r15_a_malformed_waste_key_is_refused_before_any_span_is_priced`, which I
+verified kills the mutant.
+
+This is the increment-2 ruling in miniature, and it is the reason that ruling
+was right. The claim was "verified empirically, not argued" — but the empirical
+check ran over a parametrization of malformed keys against a *healthy* trace,
+and the distinguishing input needs a trace that is unhealthy in a second,
+unrelated way. **An equivalence claim is only as strong as the input space it
+was checked over**, and the space here was the one the ValueError test already
+had. My own `R-R02` is classified `open`, not `equivalent`, for exactly this
+reason: I can argue it, I cannot state an input space that reaches it.
+
+### 7.4 The control arm
+
+**`W-M11-CONTROL` — `expanded.append(path)` → `expanded.append(Path(path))`.
+UPHELD as a genuine semantic no-op.** `path` is constructed as `Path(item)` two
+lines above; `Path()` of a `Path` yields an equal `PosixPath`; nothing in the
+package compares these by identity, and the line executes on every run so the
+control is not a no-op merely because it is unreachable. It survived on both
+interpreters in a clean run. The 228 kills keep their warrant.
+
+**But the control arm is weaker than the report claims, and I found out the
+hard way.** A no-op that survives shows the harness *can* report survival. It
+does **not** show the harness applied the mutation, restored the tree, or ran
+against the intended baseline. My first survivor re-run was killed by a timeout
+mid-mutation and left `W-M11-CONTROL` **applied to the tree**; the next run
+reported "baseline green" and measured two more mutants against a
+silently-mutated baseline. Both still survived, so nothing was wrong with the
+answer — and nothing in the harness would have told me if something had been.
+
+That is the third distinct restore hazard this team has recorded (the coder's
+`.pyc` `(mtime, size)` collision, the tester's killed-process restore, and now
+this). The control arm cannot detect it, because a control arm that survives
+looks identical whether it was applied or not. The fix is a **tree digest
+compared between mutants**, which my harness now does and which belongs in R53
+beside the other three. `tests/mutations.json` records it.
+
+### 7.5 What this says about the tester's question
+
+Wave 1 (152, independent of the author) left 23 survivors. Wave 2 (79, designed
+after wave 1's kills, over untouched anchors) left 17 — sixteen of them real.
+Wave 3 (59, designed after both, over anchors neither touched) left 5 — three of
+them real, plus one overturned equivalence claim from wave 2's ledger.
+
+**The pattern is not exhausted, and the shape of the residue has changed.**
+Waves 1 and 2 found unasserted *behaviours*. Wave 3 found, in R-C07, an
+unasserted behaviour that was unassertable — the corpus could not produce the
+input, so five determinism tests ran green over a trace that could not
+distinguish sorted from unsorted. That is not a gap a fourth wave of mutations
+closes; it is a gap in the **fixture corpus**, and the check that would find it
+is R48's both-arms principle applied to the *cost* section rather than to
+detectors: for every ordering the spec pins, at least one fixture must have two
+things to order.
+
+**That is my recommendation to the PM in place of a fourth wave**, and it
+generalises the amendment the increment-2 review already asked for.
 
 ---
 
 ## 8. Suite, lint and types
 
-*(filled in below)*
+Both interpreters verified to import the tree under test before every
+measurement.
+
+| | CPython 3.11.15 | CPython 3.12.3 |
+| --- | --- | --- |
+| Full suite | **2086 passed, 1 xfailed** | **2086 passed, 1 xfailed** |
+| `ruff check` | clean | clean |
+| `ruff format --check` | 65 files formatted | 65 files formatted |
+| `mypy --strict` | no issues in 30 source files | no issues in 30 source files |
+| `tests/allowed_skips.txt` | empty | empty |
+| Collection floors | at current counts | at current counts |
+
+Baselines: 1,337 before increment 3; 2,035 handed to me; **2,086** now.
+
+**The one remaining xfail is deliberate and is not a bug I declined to fix.** It
+is the display half of BUG-2 — whether `--no-previews` should *blank* a
+trace-derived identifier as well as redact it — which is a behaviour change in a
+pinned taxonomy and therefore the PM's (see the S16 ruling). Its `reason` string
+is rewritten to say exactly what is fixed and what is not, so nobody inherits a
+false "done" and nobody inherits a false "broken".
+
+The tester's other eleven strict xfails are resolved, and every one of their
+"reproduces today" companions is **replaced** rather than deleted, so a fix that
+turned one wrong behaviour into a different wrong behaviour is still red.
+
+---
+
+## 9. Merge verdict
+
+**Merge**, with these conditions:
+
+1. **The PM queues S14–S23.** S14 (the truncated PEM) is the one with a security
+   consequence and must be settled **before increment 4's renderer ships**,
+   because increment 4 is when those bytes reach a browser. S16 and S21 shape
+   code increment 4 will write. S23 is a ten-line change that stops a tripwire
+   drifting every increment.
+2. **Trey does the rate review, `cache_read` on `claude-fable-5-1` and
+   `claude-mythos-5-1` first.** Everything else in this branch is checkable by a
+   test. That cell is not, it breaks the table's own pattern by a factor of
+   four, and it sits in the token component that dominates real traces by two
+   orders of magnitude.
+3. **Increment 4 adds the ledger-anchor test (C7) and the ordering-fixture
+   clause (§7.5).** Both are cheap and both close a class rather than an
+   instance.
+
+Nothing in this branch blocks the merge. The seven bugs are fixed, the eighth
+defect is found and closed, the mutation ledger is 290 entries with one
+overturned equivalence claim, and the suite is green on both interpreters with a
+single deliberate, documented xfail.
+
+What I would say to the owner in one sentence: **the code is the most careful
+this project has produced, the verification of it is the most honest, and the
+one number nobody can check is the one the product exists to print.**

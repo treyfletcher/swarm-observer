@@ -1113,6 +1113,38 @@ class TestMutationGapsR28R29R30R31:
             ("bravo", 1),
         ]
 
+    def test_r47_waste_by_finding_is_built_in_sorted_key_order(self) -> None:
+        """R47 (mutation C32): the mapping's *insertion* order is normalized.
+
+        ``render_json`` writes with ``sort_keys=True``, so today nothing in the
+        report can see this dict's order and dropping the ``sorted`` left the
+        suite green. It is still the difference between a report whose bytes are
+        a function of the trace and one that inherits the order the CLI happened
+        to build the waste mapping in — R47's property, one layer below where
+        R47 is currently asserted. The day a renderer iterates this mapping
+        (increment 4's per-finding waste column is the obvious candidate) the
+        normalization is the only thing standing between it and detector
+        registration order.
+
+        The input is handed in reversed so insertion order and sorted order
+        differ, and that premise is asserted rather than assumed.
+        """
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        built = builder.build()
+        ids = [
+            "retry_storm:ffffffffffff",
+            "agent_loop:aaaaaaaaaaaa",
+            "repeated_tool_call:555555555555",
+            "blocked_agent:000000000000",
+        ]
+        handed_in = {finding_id: (0,) for finding_id in ids}
+        assert list(handed_in) == ids, "the mapping is not in insertion order"
+        assert list(handed_in) != sorted(ids), "insertion order already equals sorted order"
+
+        report = compute_costs(built, SHIPPED, waste_seqs=handed_in)
+        assert list(report.waste_by_finding) == sorted(ids)
+
 
 class TestCorpusInvariantsR31:
     """R30/R31 over every checked-in fixture, not only over a hand-built trace."""

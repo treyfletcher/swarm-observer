@@ -440,6 +440,29 @@ class TestBundledSnapshotR26:
         assert snapshot.meta.source_for("claude-opus-4-1").id == "anthropic_pricing_legacy"
         assert snapshot.meta.source_for("no-such-model") is None
 
+    def test_r26_the_bundled_snapshot_memo_takes_no_arguments(self) -> None:
+        """R26 (mutation S11): the recorded reason S11 is an *equivalent* mutant.
+
+        ``lru_cache(maxsize=1)`` -> ``maxsize=2`` survived the sweep, and no
+        test can kill it: the cache is keyed on the call arguments and this
+        function has none, so both sizes hold the same single entry forever.
+        The mutant is behaviourally identical, not under-tested, and the sweep's
+        survivor list says so rather than the next tester re-deriving it.
+
+        What *is* assertable is the premise — that the function is nullary, and
+        that its memo is therefore total. If a parameter is ever added, the
+        cache size stops being decorative and this test is where that surfaces.
+        """
+        import inspect
+
+        assert inspect.signature(bundled_snapshot.__wrapped__).parameters == {}
+        bundled_snapshot.cache_clear()
+        first = bundled_snapshot()
+        assert bundled_snapshot.cache_info().currsize == 1
+        for _ in range(5):
+            assert bundled_snapshot() is first
+        assert bundled_snapshot.cache_info().currsize == 1
+
     def test_r26_bundled_snapshot_is_a_memo_of_one_frozen_value(self) -> None:
         """R47: two loads in one process are the same immutable snapshot."""
         assert bundled_snapshot() is bundled_snapshot()

@@ -299,22 +299,33 @@ class TestMutationLedgerR49:
         assert isinstance(entries, list)
         return [item for item in entries if not item.get("retired")]
 
-    def test_r49_every_live_mutation_anchor_still_occurs_exactly_once(self) -> None:
-        """R49: the ledger is re-runnable, asserted rather than hoped.
-
-        Exactly once, not at least once: a sweep that applies an anchor matching
-        two places mutates only the first and reports a verdict for a mutation
-        it did not fully make.
-        """
-        drifted: list[str] = []
-        for item in self.live_mutations():
-            source = (REPO / item["module"]).read_text(encoding="utf-8")
-            if source.count(item["old"]) != 1:
-                drifted.append(f"{item['id']} ({source.count(item['old'])} matches)")
-        assert not drifted, (
-            "these mutation anchors no longer match their module exactly once, so a "
-            f"re-run would silently skip them: {drifted}"
-        )
+    # There is deliberately **no test here comparing an anchor to its module's
+    # source text**, and the reason is worth more than the test would have been.
+    #
+    # The first version of this class had one: every live `old` string must occur
+    # exactly once in its module. It looked like the obvious guard, it caught the
+    # three anchors that had gone stale under the review's fix commits, and it
+    # was verified to fail. It was also a **"kill everything" oracle**. A sweep
+    # runs the suite with a mutation *applied*; the applied anchor is then absent;
+    # this test failed; and the very next full run reported **289 of 289 mutants
+    # killed, including the declared control arm**. Every verdict in that run was
+    # this test failing, not the check each mutant was aimed at.
+    #
+    # The control arm is the only reason that was visible, which is precisely
+    # what the tester asked the reviewer to weigh, answered by demonstration.
+    #
+    # Tolerating the mutated form is not enough either, and that is the deeper
+    # point: **44 anchors in this ledger are shared by two or more entries** (a
+    # line with three plausible mutations gets three entries), and 18 more are
+    # nested inside another entry's anchor. Applying any one of them makes its
+    # siblings match neither form. A ledger of this shape and a source-text
+    # assertion inside the oracle are structurally incompatible.
+    #
+    # So the anchor check belongs in the **harness**, where a drifted anchor is
+    # reported as NOT-APPLIED rather than silently skipped — which is what the
+    # tester's harness already did and what surfaced the three stale anchors. The
+    # tests below read only the ledger, so they are safe under a sweep. See the
+    # increment-3 review, C7, and R53's harness clauses.
 
     def test_r49_every_mutation_actually_changes_its_module(self) -> None:
         """R49: an anchor whose replacement equals it is a mutant that mutates nothing."""

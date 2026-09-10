@@ -25,7 +25,7 @@
     "tests/test_reader_and_limits.py": 91,
     "tests/test_record_tolerance.py": 47,
     "tests/test_redaction.py": 155,
-    "tests/test_suite_integrity.py": 23,
+    "tests/test_suite_integrity.py": 22,
     "tests/test_traceability.py": 6,
     "tests/test_warnings_and_spans.py": 58
   }

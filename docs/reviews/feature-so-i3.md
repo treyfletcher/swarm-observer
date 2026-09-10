@@ -289,6 +289,15 @@ place for the *sweep*; it is not the correct place for a test that a checked-in
 data file matches the source it describes, which is ordinary suite integrity and
 squarely inside R49's existing shape.
 
+**And then I changed it back for one of the five, and that is worth more.** The
+anchor-versus-source assertion is a "kill everything" oracle when run under a
+sweep, it produced a 289-of-289 mutation score, and the only thing that caught
+it was the control arm. It is removed; the four ledger-only tests stay. The full
+account is §7.5, and it is the most useful thing in this review.
+
+The count of five above is left uncorrected on purpose: I want the next reader
+to see the claim and then see it fail.
+
 ---
 
 ## 3. Rulings on the coder's assumptions (A-c1…A-c15)
@@ -719,17 +728,59 @@ was checked over**, and the space here was the one the ValueError test already
 had. My own `R-R02` is classified `open`, not `equivalent`, for exactly this
 reason: I can argue it, I cannot state an input space that reaches it.
 
-### 7.5 The control arm
+### 7.5 The control arm — and the thing it caught
 
 **`W-M11-CONTROL` — `expanded.append(path)` → `expanded.append(Path(path))`.
 UPHELD as a genuine semantic no-op.** `path` is constructed as `Path(item)` two
 lines above; `Path()` of a `Path` yields an equal `PosixPath`; nothing in the
 package compares these by identity, and the line executes on every run so the
 control is not a no-op merely because it is unreachable. It survived on both
-interpreters in a clean run. The 228 kills keep their warrant.
+interpreters in clean runs. The 228 kills keep their warrant.
 
-**But the control arm is weaker than the report claims, and I found out the
-hard way.** A no-op that survives shows the harness *can* report survival. It
+**And then it earned its keep, against me.**
+
+C7 above describes the ledger-anchor test I added: every live `old` string must
+occur exactly once in its module. It looked like the obvious guard, it caught
+the three anchors that had gone stale under my own fix commits, and I verified
+it could fail. It was also a **"kill everything" oracle**. A sweep runs the
+suite with the mutation *applied*, so the applied anchor is absent and the test
+fails — and the very next full 289-mutant run reported
+
+```
+TOTAL 289  killed 289  SURVIVED 0  not-applied 0
+```
+
+Every verdict in that run was my new test failing, not the check each mutant was
+aimed at. **The control arm reporting `killed` was the only signal that anything
+was wrong.** Without it I would have put a 100% mutation score in this document
+as the review's headline number — the exact failure the increment-2 adjudication
+was written about, committed by the reviewer upholding it.
+
+That is the tester's question 3 answered by demonstration rather than by
+agreement. The control arm is the sweep's only self-check, and it works.
+
+Making the test tolerate the *mutated* form is not enough, and the reason is
+structural: **44 anchors in this ledger are shared by two or more entries** — a
+line with three plausible mutations gets three entries — and 18 more are nested
+inside another entry's anchor, so applying any one makes its siblings match
+neither form. A ledger of this shape and a source-text assertion inside the
+oracle are incompatible, not merely awkward.
+
+The anchor check is therefore **removed from the suite**. The four ledger tests
+that read only the JSON stay; the one that read source text does not, and the
+reason sits in the file where the next person will look. The check belongs in
+the **harness**, where a drifted anchor is a `NOT-APPLIED` line — which is what
+the tester's harness already did and what surfaced my three stale anchors in the
+first place. It belongs in R53 as a fifth harness clause.
+
+C7 in §2 is left as I first wrote it with this correction attached, because "the
+reviewer added a guard and the guard was wrong in the way the review is about"
+is more useful to the next agent than a tidy account.
+
+### 7.5.1 The control arm's own limit
+
+**The control arm is also weaker than the report claims, in the other
+direction, and I found that out the hard way too.** A no-op that survives shows the harness *can* report survival. It
 does **not** show the harness applied the mutation, restored the tree, or ran
 against the intended baseline. My first survivor re-run was killed by a timeout
 mid-mutation and left `W-M11-CONTROL` **applied to the tree**; the next run
@@ -773,14 +824,14 @@ measurement.
 
 | | CPython 3.11.15 | CPython 3.12.3 |
 | --- | --- | --- |
-| Full suite | **2094 passed, 1 xfailed** | **2094 passed, 1 xfailed** |
+| Full suite | **2093 passed, 1 xfailed** | **2093 passed, 1 xfailed** |
 | `ruff check` | clean | clean |
 | `ruff format --check` | 65 files formatted | 65 files formatted |
 | `mypy --strict` | no issues in 30 source files | no issues in 30 source files |
 | `tests/allowed_skips.txt` | empty | empty |
 | Collection floors | at current counts | at current counts |
 
-Baselines: 1,337 before increment 3; 2,035 handed to me; **2,094** now.
+Baselines: 1,337 before increment 3; 2,035 handed to me; **2,093** now.
 
 **The one remaining xfail is deliberate and is not a bug I declined to fix.** It
 is the display half of BUG-2 — whether `--no-previews` should *blank* a

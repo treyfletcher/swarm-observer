@@ -266,15 +266,23 @@ would be invisible. A test pins that they agree.
 mentioned because A-c10's reasoning is otherwise exactly right and increment 4
 deletes half the dict.
 
-**C7 — `tests/mutations.json` has no test that reads it.** It is checked in,
-diffable and re-runnable, which is what amendment 2 asked for — but nothing in
-the suite asserts that its anchors still apply. Three of them had silently gone
-stale under my own fix commits (`M10`, `M18`, `W-J15`); I re-anchored them by
-hand. A ten-line test asserting every `old` occurs exactly once in its named
-module would have caught that at the moment it happened, and is the cheapest
-possible step toward amendment 4. **I recommend increment 4 adds it.** I have
-not added it myself: it is a suite-integrity requirement and belongs with R53,
-which is not yet in the spec.
+**C7 — `tests/mutations.json` had no test that reads it. Raised as a comment,
+then implemented, because the thing it guards against happened three times
+inside this review.** Amendment 2 put the mutation set in the repository so the
+next sweep is a *re-run*; a re-run is only possible while every anchor still
+matches, and nothing asserted that. `M10`, `M18` and `W-J15` all went stale
+under my own fix commits, and the only signal was a `NOT-APPLIED` line in a
+sweep I happened to run. `TestMutationLedgerR49` now asserts five properties
+without running a single mutation: every live anchor occurs **exactly once**,
+every mutation changes its module, every survivor carries a reason, the ledger
+declares a control arm recorded as surviving, and amendment 1's per-module floor
+of 8 holds. Verified to fail by drifting one anchor.
+
+I changed my mind about this one mid-review, and the reason is worth recording:
+I had ruled it "belongs with R53, which is not in the spec". That is the correct
+place for the *sweep*; it is not the correct place for a test that a checked-in
+data file matches the source it describes, which is ordinary suite integrity and
+squarely inside R49's existing shape.
 
 ---
 
@@ -626,7 +634,40 @@ deletion relies on is now pinned rather than assumed. Two of the three real
 gaps this wave found were in code I had written hours earlier, which is the
 argument for sweeping a fix and not only the thing it fixed.
 
-### 7.3 The two equivalence claims
+### 7.3 The finding I did not expect: a fix that disarmed a guard
+
+Re-running the **whole checked-in ledger** against the fixed tree — the first
+time this project has done that, and precisely what amendment 2 checked the
+ledger in for — turned up something no wave could have found.
+
+**`C10` — dropping `Inexact` from `_EXACT.traps` — was killed by the tester's
+suite and survives after my own BUG-1 fix.**
+
+Moving `quantize_cost` inside the `DecimalException` guard was right. But it
+made the two decimal signals indistinguishable for every input the suite drove:
+an oversized token count now raises `InvalidOperation` from the quantize, is
+caught, and becomes `CostError` — whether or not `Inexact` is trapped at all.
+R29's central clause, the thing that turns "nothing rounds" from a claim into a
+check, became **unfalsifiable as a side effect of a repair**, and every one of
+2,086 tests stayed green.
+
+That is this project's signature defect arriving through the least expected
+door. Not a new guard that cannot fire; an existing, well-tested guard silently
+disarmed by a fix to something else. Nothing but a re-run of the ledger says so,
+which is the strongest argument I can make for the increment-2 review's
+amendment 4 — **run the checked-in sweep in CI.** A ledger that is only ever
+re-run when a reviewer feels like it is a regression suite with no schedule.
+
+The separating input: a rate with 60 significant digits times an 11-token count
+needs 61 digits for the **product**, so the multiply rounds — while the rounded
+result quantizes to six places without complaint. Trapped it is a `CostError`;
+untrapped it is a silently rounded dollar figure. Verified to kill `C10`, with a
+non-vacuous arm (seven tokens against the same rate is an exact 60-digit product
+and must still price) so the new test is not satisfied by refusing any long
+rate. The ledger records on `C10` itself *when* it stopped being killed, because
+an entry that says "killed" is worth less than one that says when that changed.
+
+### 7.4 The two equivalence claims
 
 **`S11` — `@lru_cache(maxsize=1)` → `maxsize=2` on `bundled_snapshot`.
 UPHELD.** The function is nullary, so the cache is keyed on nothing and both
@@ -673,7 +714,7 @@ was checked over**, and the space here was the one the ValueError test already
 had. My own `R-R02` is classified `open`, not `equivalent`, for exactly this
 reason: I can argue it, I cannot state an input space that reaches it.
 
-### 7.4 The control arm
+### 7.5 The control arm
 
 **`W-M11-CONTROL` — `expanded.append(path)` → `expanded.append(Path(path))`.
 UPHELD as a genuine semantic no-op.** `path` is constructed as `Path(item)` two
@@ -698,7 +739,7 @@ looks identical whether it was applied or not. The fix is a **tree digest
 compared between mutants**, which my harness now does and which belongs in R53
 beside the other three. `tests/mutations.json` records it.
 
-### 7.5 What this says about the tester's question
+### 7.6 What this says about the tester's question
 
 Wave 1 (152, independent of the author) left 23 survivors. Wave 2 (79, designed
 after wave 1's kills, over untouched anchors) left 17 — sixteen of them real.
@@ -727,14 +768,14 @@ measurement.
 
 | | CPython 3.11.15 | CPython 3.12.3 |
 | --- | --- | --- |
-| Full suite | **2086 passed, 1 xfailed** | **2086 passed, 1 xfailed** |
+| Full suite | **2093 passed, 1 xfailed** | **2093 passed, 1 xfailed** |
 | `ruff check` | clean | clean |
 | `ruff format --check` | 65 files formatted | 65 files formatted |
 | `mypy --strict` | no issues in 30 source files | no issues in 30 source files |
 | `tests/allowed_skips.txt` | empty | empty |
 | Collection floors | at current counts | at current counts |
 
-Baselines: 1,337 before increment 3; 2,035 handed to me; **2,086** now.
+Baselines: 1,337 before increment 3; 2,035 handed to me; **2,093** now.
 
 **The one remaining xfail is deliberate and is not a bug I declined to fix.** It
 is the display half of BUG-2 — whether `--no-previews` should *blank* a
@@ -763,9 +804,9 @@ turned one wrong behaviour into a different wrong behaviour is still red.
    test. That cell is not, it breaks the table's own pattern by a factor of
    four, and it sits in the token component that dominates real traces by two
    orders of magnitude.
-3. **Increment 4 adds the ledger-anchor test (C7) and the ordering-fixture
-   clause (§7.5).** Both are cheap and both close a class rather than an
-   instance.
+3. **Increment 4 adds the ordering-fixture clause (§7.6).** The ledger-anchor
+   test (C7) is in this branch; the corpus clause is not, because it changes
+   what R48 requires of a fixture set and that is the PM's.
 
 Nothing in this branch blocks the merge. The seven bugs are fixed, the eighth
 defect is found and closed, the mutation ledger is 290 entries with one

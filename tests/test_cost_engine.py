@@ -1146,6 +1146,130 @@ class TestMutationGapsR28R29R30R31:
         assert list(report.waste_by_finding) == sorted(ids)
 
 
+class TestWaveTwoGapsR30R31:
+    """R30/R31 rows the second mutation sweep found nothing asserting.
+
+    Wave 2 of the sweep was designed over anchors wave 1 never touched. Four of
+    its survivors live in ``_by_agent`` and ``compute_costs``, and all four hide
+    behind the same thing: on the checked-in corpus every agent is declared and
+    every agent has both priced and unpriced spans, so two different expressions
+    for a row's contents agree everywhere. Each test below builds the trace
+    where they stop agreeing.
+    """
+
+    def test_r31_an_agent_known_only_from_an_unpriced_span_still_gets_a_row(self) -> None:
+        """R31 (mutation W-C06): the ``| unpriced`` half of the agent set.
+
+        R30's "nothing is silently omitted" applies to the cost section as a
+        whole. An agent whose every model call is unpriced is exactly the agent
+        a reader most wants to see, and it is invisible to the priced set. The
+        trace declares no ``AgentRun``, so ``trace.agents`` cannot supply it
+        either — the row exists only if the unpriced list is consulted.
+        """
+        builder = TraceBuilder()
+        builder.model_call(
+            agent_id="priced_only", model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000)
+        )
+        builder.model_call(
+            agent_id="unpriced_only", model="nothing-published", usage=TokenUsage(input_tokens=9)
+        )
+        trace = builder.build().model_copy(update={"agents": ()})
+        report = compute_costs(trace, SHIPPED)
+        rows = {row.agent_id: row for row in report.by_agent}
+        assert set(rows) == {"priced_only", "unpriced_only"}
+        assert rows["unpriced_only"].priced_spans == 0
+        assert rows["unpriced_only"].unpriced_spans == 1
+        assert rows["unpriced_only"].cost_usd == ZERO_USD
+
+    def test_r31_each_agents_unpriced_count_is_its_own_not_the_traces(self) -> None:
+        """R31 (mutation W-C07): two agents with *different* unpriced counts.
+
+        With one agent, or with two agents holding one unpriced span each,
+        ``len([item for item in unpriced if item.agent_id == agent_id])`` and
+        ``len(unpriced)`` are the same number. Here they are 1 and 2 against a
+        trace total of 3.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="a", model="nothing-published", usage=TokenUsage())
+        builder.model_call(agent_id="b", model="nothing-published", usage=TokenUsage())
+        builder.model_call(agent_id="b", model="also-nothing", usage=TokenUsage())
+        report = compute_costs(builder.build(), SHIPPED)
+        rows = {row.agent_id: row.unpriced_spans for row in report.by_agent}
+        assert rows == {"a": 1, "b": 2}
+        assert report.unpriced_spans == 3
+        assert len(set(rows.values())) > 1, "vacuous: the per-agent counts are all equal"
+
+    def test_r30_an_unpriced_span_with_no_recorded_model_reports_an_empty_string(self) -> None:
+        """R30 (mutation W-C10): the default for a ``None`` model is ``""``.
+
+        R30 puts the *recorded* model in the unpriced table. A span with no
+        recorded model has nothing to show, and the field is a string, so the
+        honest value is the empty one. A substituted placeholder like
+        ``"<none>"`` would be this package inventing a model id that looks like
+        the enumerated ``<synthetic>`` slug the very next reason uses — two
+        different meanings wearing the same shape.
+        """
+        builder = TraceBuilder()
+        builder.model_call(model=None, usage=TokenUsage(input_tokens=1))
+        report = compute_costs(builder.build(), SHIPPED)
+        assert len(report.unpriced) == 1
+        row = report.unpriced[0]
+        assert row.model == ""
+        assert row.reason == "model_not_in_snapshot"
+        # The contrast that gives the empty string its meaning: a *recorded*
+        # model is carried through verbatim.
+        builder = TraceBuilder()
+        builder.model_call(model="nothing-published", usage=TokenUsage(input_tokens=1))
+        assert compute_costs(builder.build(), SHIPPED).unpriced[0].model == "nothing-published"
+
+    @pytest.mark.parametrize(
+        "bad_key",
+        [
+            "not-a-finding-id",
+            "repeated_tool_call",
+            "repeated_tool_call:",
+            "repeated_tool_call:XYZXYZXYZXYZ",
+            "repeated_tool_call:abcdef01234",
+            "repeated_tool_call:abcdef0123456",
+            "Repeated_Tool_Call:abcdef012345",
+            "",
+            "1repeated:abcdef012345",
+        ],
+    )
+    def test_r15_a_waste_key_that_is_not_a_finding_id_is_refused(self, bad_key: str) -> None:
+        """R15/R29: a malformed waste key is refused, not turned into a detector.
+
+        ``_by_detector`` derives a detector slug by splitting the key on its
+        colon, so a key that is not a finding id would otherwise invent a
+        detector row and the report would grow a section for a detector that
+        does not exist.
+
+        Mutant W-C11 — deleting ``compute_costs``'s own up-front validation
+        loop — **survives this test, and is an equivalent mutant.** Verified
+        rather than assumed: with the loop gone, every key in this
+        parametrization still raises the same ``ValueError`` with the same
+        message, because ``_by_detector`` calls ``_detector_of`` on every key
+        anyway. The up-front loop is fail-fast readability, not a behavioural
+        guarantee, and its comment ("fail loudly on a key that is not a finding
+        id") describes something the code would do without it. Recorded in the
+        test report as a survivor with a reason rather than papered over.
+        """
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        with pytest.raises(ValueError):
+            compute_costs(builder.build(), SHIPPED, waste_seqs={bad_key: (0,)})
+
+    def test_r15_a_well_formed_waste_key_is_accepted(self) -> None:
+        """R15: the arm that keeps the test above from being satisfied by
+        ``compute_costs`` raising on everything."""
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        report = compute_costs(
+            builder.build(), SHIPPED, waste_seqs={"repeated_tool_call:abcdef012345": (0,)}
+        )
+        assert report.waste_by_finding["repeated_tool_call:abcdef012345"] > ZERO_USD
+
+
 class TestCorpusInvariantsR31:
     """R30/R31 over every checked-in fixture, not only over a hand-built trace."""
 

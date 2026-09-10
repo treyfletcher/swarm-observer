@@ -940,3 +940,138 @@ class TestParseWarningTaxonomyR36:
             ParseWarning(code="unknown_record_type", count=1, detail="<script>alert(1)</script>")
         with pytest.raises(ValidationError):
             ParseWarning(code="not_in_the_enum", count=1)
+
+
+class TestWaveTwoGapsR36R40:
+    """The document fields the second mutation sweep found nothing asserting.
+
+    Wave 1 of the sweep concentrated on the guards and the orderings. Wave 2 was
+    designed afterwards, deliberately over anchors wave 1 never touched — the
+    document *body*: version literals, defaults, and the count and usage fields
+    whose two plausible sources happen to agree on every fixture in the corpus.
+
+    Every test here names its mutant id and builds the input that makes the two
+    sources disagree, because on the checked-in corpus they mostly do not.
+    """
+
+    def test_r36_the_report_format_version_is_the_pinned_literal(self) -> None:
+        """R36 (mutation W-J01): the document declares its own format version.
+
+        Asserted as a literal here and read from the module everywhere else, so
+        a bump is a deliberate edit to one line of one test rather than a value
+        that follows the code wherever it goes. It is also distinct from
+        ``TRACE_SCHEMA_VERSION``: the trace model and the report layout move
+        separately, and a reader parsing ``report.json`` keys off this one.
+        """
+        assert REPORT_FORMAT_VERSION == "1.0.0"
+        document = document_of(sentinel_trace())
+        assert document["meta"]["report_format_version"] == "1.0.0"
+        assert document["meta"]["schema_version"] == TRACE_SCHEMA_VERSION
+
+    def test_r38_render_options_defaults_are_the_permissive_ones(self) -> None:
+        """R38 (mutations W-J08, W-J09): the defaults an API caller inherits.
+
+        ``RenderOptions()`` with no argument is what a library caller who never
+        heard of ``--no-previews`` constructs. If ``previews`` defaulted to
+        ``False`` every such caller would silently get a blanked report and no
+        test in the suite would notice, because every CLI path passes the flag
+        explicitly. The gap default is pinned for the same reason: it is echoed
+        into ``meta.options`` and a reader compares it against the run they
+        thought they asked for.
+        """
+        options = RenderOptions()
+        assert options.previews is True
+        assert options.blocked_gap_seconds == 60
+        assert options.detectors == ()
+        document = report_document(
+            trace=sentinel_trace(),
+            findings=(),
+            cost=compute_costs(sentinel_trace(), SHIPPED),
+            tool_version=__version__,
+            options=RenderOptions(),
+        )
+        assert document["meta"]["options"] == {
+            "previews": True,
+            "blocked_gap_seconds": 60,
+            "detectors": [],
+        }
+
+    def test_r36_meta_counts_warnings_counts_the_traces_warnings(self) -> None:
+        """R36 (mutation W-J14): a trace *with* warnings, so zero is falsifiable.
+
+        Every count in ``meta.counts`` was asserted against a trace whose
+        warning list happened to be empty, which makes ``len(trace.warnings)``
+        and the literal ``0`` indistinguishable.
+        """
+        builder = TraceBuilder()
+        builder.model_call(usage=TokenUsage(input_tokens=1))
+        builder.warning("unknown_record_type", 3, "some_detail")
+        builder.warning("missing_usage", 2, "another_detail")
+        document = document_of(builder.build())
+        assert document["meta"]["counts"]["warnings"] == 2
+        assert len(document["warnings"]) == 2
+
+    def test_r36_a_warnings_row_carries_its_own_count_not_one(self) -> None:
+        """R36 (mutation W-J15): ``count`` is the occurrence tally, not a 1.
+
+        R9 collapses repeated parse warnings into one row *with a count*, so a
+        row that always reports 1 throws away the whole point of the collapse.
+        The two warnings above carry 3 and 2 so neither can be confused with a
+        constant.
+        """
+        builder = TraceBuilder()
+        builder.model_call(usage=TokenUsage(input_tokens=1))
+        builder.warning("unknown_record_type", 3, "some_detail")
+        builder.warning("missing_usage", 2, "another_detail")
+        rows = {row["code"]: row["count"] for row in document_of(builder.build())["warnings"]}
+        assert rows == {"unknown_record_type": 3, "missing_usage": 2}
+
+    def test_r30_unpriced_usage_is_the_unpriced_spans_tokens_not_the_total(self) -> None:
+        """R30/R31 (mutation W-J16): a trace where the two totals differ.
+
+        ``cost.total.unpriced_usage`` answers "how many tokens does this report
+        have no price for". On a trace whose every span is priced — or whose
+        every span is unpriced — it equals ``usage`` and the field is
+        untestable. This trace is deliberately mixed.
+        """
+        builder = TraceBuilder()
+        builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        builder.model_call(model="nothing-published", usage=TokenUsage(input_tokens=77))
+        document = document_of(builder.build())
+        total = document["cost"]["total"]
+        assert total["usage"]["input_tokens"] == 1_000
+        assert total["unpriced_usage"]["input_tokens"] == 77
+        assert total["usage"] != total["unpriced_usage"], "vacuous: the two agree on this trace"
+        assert total["priced_spans"] == 1
+        assert total["unpriced_spans"] == 1
+
+    def test_r31_by_detector_reports_unknown_cost_findings_separately_from_all(self) -> None:
+        """R31/A-c4 (mutation W-J13): ``findings`` and ``findings_unpriced`` differ.
+
+        A-c4's whole argument is that a per-detector ``0.000000`` is legible
+        *because* ``findings_with_unknown_cost`` sits beside it. If the two
+        columns carry the same number the reassurance is a tautology. Here one
+        detector has two findings of which exactly one is unpriceable, which is
+        the only shape that can tell the two apart.
+        """
+        builder = TraceBuilder()
+        priced = builder.model_call(model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000))
+        unpriceable = builder.model_call(
+            model="nothing-published", usage=TokenUsage(input_tokens=1_000)
+        )
+        trace = builder.build()
+        cost = compute_costs(
+            trace,
+            SHIPPED,
+            waste_seqs={
+                "repeated_tool_call:aaaaaaaaaaaa": (priced.seq,),
+                "repeated_tool_call:bbbbbbbbbbbb": (unpriceable.seq,),
+            },
+        )
+        rows = cost_document(cost)["by_detector"]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["detector"] == "repeated_tool_call"
+        assert row["findings"] == 2
+        assert row["findings_with_unknown_cost"] == 1
+        assert row["findings"] != row["findings_with_unknown_cost"], "vacuous: the two agree"

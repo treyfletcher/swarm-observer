@@ -27,6 +27,7 @@ assumed.
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -632,3 +633,84 @@ class TestResolutionLadderR27:
             "‮claude-opus-5",
         ):
             assert source.resolve_model_key(hostile) is None
+
+
+class TestSnapshotMetaFieldConstraintsR26:
+    """R26/A4: the provenance fields' own shapes, which the sweep found unpinned.
+
+    The shipped snapshot has a well-formed ``version`` and a well-formed
+    ``as_of`` on every source, so a validator that checked neither would load
+    it and every test that reads it. Wave 2 of the mutation sweep removed each
+    constraint in turn and nothing went red. These matter because A4's promise
+    is that the rate table is *reviewable*: a date a reviewer cannot parse and a
+    version that is the empty string both defeat the "list price at a date"
+    caveat every report prints beside a dollar figure.
+    """
+
+    @pytest.mark.parametrize(
+        "as_of",
+        [
+            "2026-1-1",
+            "26-01-01",
+            "2026/01/01",
+            "2026-01-01T00:00:00Z",
+            "today",
+            "",
+            " 2026-01-01",
+            "2026-01-01 ",
+            "2026-01-01\n",
+        ],
+    )
+    def test_r26_a_source_as_of_that_is_not_an_iso_date_is_refused(self, as_of: str) -> None:
+        """R26/A4 (mutation WR07): ``as_of`` carries ``DATE_PATTERN``.
+
+        Includes the trailing-newline case, which is the ``$``-versus-
+        end-of-input trap this codebase has now hit twice (increment-1 B5, and
+        ``parse_rate`` above).
+        """
+        with pytest.raises(ValidationError):
+            RateSourceRef(
+                id="test_source",
+                label="a source",
+                url="https://example.invalid/rates",
+                as_of=as_of,
+                models=("m-1",),
+            )
+
+    def test_r26_a_well_formed_as_of_is_accepted(self) -> None:
+        """R26: the arm that stops the refusals above being satisfied by a
+        constructor that rejects everything."""
+        reference = RateSourceRef(
+            id="test_source",
+            label="a source",
+            url="https://example.invalid/rates",
+            as_of="2026-01-01",
+            models=("m-1",),
+        )
+        assert reference.as_of == "2026-01-01"
+
+    @pytest.mark.parametrize("version", ["", " ", "a b", "v1/2", "v1\n", "x" * 65, "café"])
+    def test_r26_a_snapshot_version_outside_its_alphabet_is_refused(self, version: str) -> None:
+        """R26 (mutation WR08): ``version`` is non-empty and alphabet-constrained.
+
+        It is rendered next to every dollar figure in both reports, and into
+        the HTML one that increment 4 escapes. An empty one makes the provenance line read as though
+        no snapshot was used at all; a space or a slash makes it unusable as
+        the cache key or filename a later increment will want.
+        """
+        with pytest.raises(ValidationError):
+            SnapshotMeta(version=version, snapshot_date="2026-01-01")
+
+    @pytest.mark.parametrize("version", ["1", "2026-09-10", "v1.0.0", "a" * 64, "A_b-c.1"])
+    def test_r26_a_legal_snapshot_version_is_accepted(self, version: str) -> None:
+        """R26: the shapes the shipped file and a plausible successor use."""
+        assert SnapshotMeta(version=version, snapshot_date="2026-01-01").version == version
+
+    def test_r26_the_shipped_snapshots_provenance_satisfies_both_constraints(self) -> None:
+        """R26/A4: the constraints above are not merely satisfiable — they hold
+        on the file that actually ships, for every source."""
+        meta = bundled_snapshot().meta
+        assert re.fullmatch(DATE_PATTERN, meta.snapshot_date)
+        assert meta.version
+        for source in meta.sources:
+            assert re.fullmatch(DATE_PATTERN, source.as_of), source.id

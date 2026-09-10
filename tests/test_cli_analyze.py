@@ -1140,3 +1140,135 @@ class TestFailClosedPricingR39:
         code, _, err = invoke("analyze", str(source), "--json", str(report))
         assert code == EXIT_OK, err
         assert Decimal(json.loads(report.read_text())["cost"]["total"]["cost_usd"]) > 0
+
+
+class TestWaveTwoGapsR38R39R40:
+    """CLI surfaces the second mutation sweep found nothing asserting.
+
+    Each of these survived because the suite only ever drove the *one-item*
+    case: one deferred flag at a time, one unknown detector slug, one written
+    path, one error message that happened not to end in a newline. A collection
+    of one cannot distinguish a sorted walk from an arbitrary one, or a
+    first element from a last.
+    """
+
+    def test_r38_the_detectors_listing_ends_with_a_newline(self) -> None:
+        """R38/R47 (mutation W-M02): the last line is terminated like the others.
+
+        ``"\\n".join`` without the trailing terminator makes the final row the
+        one line in the output a shell, a pager or a ``read`` loop treats
+        differently, and no assertion in the suite compared the whole bytes.
+        """
+        document = detectors_document()
+        assert document.endswith("\n")
+        assert not document.endswith("\n\n")
+        code, out, err = invoke("detectors")
+        assert (code, err) == (EXIT_OK, "")
+        assert out == document
+        assert len(out.splitlines()) == len(DETECTOR_SLUGS)
+
+    def test_r39_two_deferred_flags_together_report_the_first_by_flag_name(self) -> None:
+        """R39 (mutation W-M08): a stable choice when both are given.
+
+        ``--out`` and ``--explain`` are both refused, and with both on the
+        command line exactly one message is printed. Which one must be a
+        function of the flags rather than of dict insertion order — R47's rule
+        applied to stderr. The walk is sorted by attribute name, so ``explain``
+        precedes ``out``.
+        """
+        code, out, err = invoke(
+            "analyze", str(CLEAN), "--json", "k.json", "--out", "r.html", "--explain"
+        )
+        assert code == EXIT_USAGE
+        assert out == ""
+        assert err.count("\n") == 1
+        assert "--explain" in err
+        assert "--out" not in err
+        # And the same answer with the flags typed the other way round, which is
+        # what makes this a property of the walk and not of argv.
+        assert (
+            invoke("analyze", str(CLEAN), "--json", "k.json", "--explain", "--out", "r.html")[2]
+            == err
+        )
+
+    def test_r39_two_unknown_detectors_are_reported_by_the_first_in_sort_order(self) -> None:
+        """R39 (mutation W-M06): ``unknown[0]``, with two unknown slugs.
+
+        With one unknown slug ``unknown[0]`` and ``unknown[-1]`` are the same
+        string. Two, given in reverse sorted order on the command line, is the
+        smallest input that can tell them apart — and pins that the message is
+        a function of the *set* of bad slugs rather than of the order typed.
+        """
+        code, _, err = invoke(
+            "analyze",
+            str(CLEAN),
+            "--json",
+            "k.json",
+            "--detector",
+            "zzz_not_a_detector",
+            "--detector",
+            "aaa_not_a_detector",
+        )
+        assert code == EXIT_USAGE
+        assert "aaa_not_a_detector" in err
+        assert "zzz_not_a_detector" not in err
+        reversed_argv = invoke(
+            "analyze",
+            str(CLEAN),
+            "--json",
+            "k.json",
+            "--detector",
+            "aaa_not_a_detector",
+            "--detector",
+            "zzz_not_a_detector",
+        )
+        assert reversed_argv[2] == err
+
+    def test_r39_main_renders_any_usage_error_as_exactly_one_terminated_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R39 (mutation W-M12): the ``rstrip`` in ``main``, which has no live caller.
+
+        ``main`` strips a trailing newline off a ``UsageError``'s message before
+        adding its own. Every ``UsageError`` this package constructs today ends
+        without one — including argparse's, because ``_Parser.error`` appends
+        ``": error: <message>"`` after the usage block — so the strip is dead on
+        every existing path and the mutant survived a 79-mutant sweep.
+
+        That makes it a guard whose only caller is hypothetical, which this
+        project has shipped before (the increment-2 review's "measurement path
+        with no caller"). It is asserted here at ``main``'s own seam, which is
+        where the promise lives: *any* ``UsageError``, however its message is
+        punctuated, renders as one terminated line and no more.
+        """
+
+        def raising(argv: Any = None, *, stdout: Any = None) -> int:
+            raise UsageError("swarm-observer: error: something went wrong\n")
+
+        monkeypatch.setattr(cli_main, "run", raising)
+        err = io.StringIO()
+        code = main(["detectors"], stdout=io.StringIO(), stderr=err)
+        assert code == EXIT_USAGE
+        assert err.getvalue() == "swarm-observer: error: something went wrong\n"
+
+    def test_r39_a_usage_error_ends_in_exactly_one_newline_on_every_live_path(self) -> None:
+        """R39: "argparse-style message on stderr", for both kinds of message.
+
+        R39 reserves the *one sanitized line* rule for exit 2. Exit 3 is
+        argparse-style, which for a bad choice is the usage block plus a final
+        ``prog: error: …`` line. What must hold for both is the same: stderr
+        ends in exactly one newline, stdout is untouched, and no traceback
+        reaches either. The two invocations differ in who wrote the message —
+        this package for the first, argparse for the second.
+        """
+        ours = invoke("analyze", str(CLEAN), "--json", "k.json", "--max-records", "0")
+        theirs = invoke("analyze", str(CLEAN), "--json", "k.json", "--adapter", "no_such_adapter")
+        assert ours[2].count("\n") == 1, repr(ours[2])
+        assert theirs[2].count("\n") > 1, "vacuous: argparse no longer emits its usage block"
+        for code, out, err in (ours, theirs):
+            assert code == EXIT_USAGE
+            assert out == ""
+            assert err.endswith("\n")
+            assert not err.endswith("\n\n")
+            assert "Traceback" not in err
+            assert err.rstrip("\n").splitlines()[-1].startswith("swarm-observer")

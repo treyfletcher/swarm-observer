@@ -28,12 +28,14 @@ import time
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from swarm_observer.detect.base import (
     MAX_EVIDENCE_SPANS,
     MAX_PREVIEWS,
     NON_CONFORMING_TOOL_NAME,
     TOOL_NAME_PATTERN,
+    TRACE_DERIVED_METRIC_KEYS,
     UNKNOWN_TOOL_NAME,
     DetectorConfig,
     Finding,
@@ -288,6 +290,179 @@ class TestSyntheticHostileInputR16:
             item for item in all_findings(builder.build()) if item.detector == "repeated_tool_call"
         ]
         assert found[0].agent_ids == ("aaa", "zzz")
+
+
+class TestMetricsAreAuthoredR16:
+    """R16: what is allowed to be in ``metrics``, enforced rather than remembered.
+
+    R16's promise is that "a reader skimming the findings table is reading bytes
+    this codebase authored", with exactly one exception it names: ``tool_name``.
+    The exception is a *shape* check, and increment 1's review found this same
+    class of defect one layer down — a guard that accepted an AWS key id as a
+    "safe" class name. So two things are checked here that the branch previously
+    only asserted about the values that happened to exist:
+
+    * the exception is enumerated in :data:`TRACE_DERIVED_METRIC_KEYS`, so
+      increment 4's renderer consumes a list instead of remembering a sentence;
+    * every *other* metrics string is refused by :class:`Finding` itself unless
+      it is a slug this package could have written, so a future detector cannot
+      open a second hole by putting trace text under a new key.
+
+    What remains open — and is deliberately visible below — is that a
+    credential-shaped string *is* a legal tool name. Increment 4's redaction has
+    to cover ``metrics`` for its injection probe's promise to hold; the canary
+    ledger carries that as ``metrics_redaction_dropped``. Those two requirement
+    ids are deliberately not written here, because a citation the R52 check reads
+    would mark them covered by a test that does not test them.
+    """
+
+    #: Every enumerated metrics value the seven detectors can emit, taken from
+    #: the detectors' own exported constants rather than restated here.
+    def authored_values(self) -> set[str]:
+        from swarm_observer.detect.anomalous_span import DIMENSIONS
+        from swarm_observer.detect.retry_storm import KIND_API, KIND_MIXED, KIND_TOOL
+        from swarm_observer.detect.unresolved_tool_call import REASONS
+
+        return {KIND_API, KIND_MIXED, KIND_TOOL, *REASONS, *DIMENSIONS}
+
+    def test_r16_every_metrics_string_is_authored_or_a_guarded_tool_name(self) -> None:
+        """R16: over the whole corpus, the only trace-derived metric is ``tool_name``."""
+        authored = self.authored_values()
+        seen_keys: set[str] = set()
+        for path in sorted(FIXTURE_DIR.glob("*.jsonl")):
+            for finding in all_findings(load_trace(path)):
+                for key, value in finding.metrics.items():
+                    if not isinstance(value, str):
+                        continue
+                    seen_keys.add(key)
+                    if key in TRACE_DERIVED_METRIC_KEYS:
+                        continue
+                    assert value in authored, (finding.detector, key, value)
+        assert seen_keys, "no fixture produced a string metric; the check would be vacuous"
+        assert seen_keys >= TRACE_DERIVED_METRIC_KEYS
+
+    def test_r16_a_new_metric_key_cannot_smuggle_trace_text(self) -> None:
+        """R16: an authored key refuses anything that is not a slug this package wrote.
+
+        Both arms: the legal slug constructs, the payload does not. Without the
+        negative arm this asserts only that valid input is valid.
+        """
+        from swarm_observer.detect.base import build_finding
+
+        from .synthetic_traces import TraceBuilder
+
+        builder = TraceBuilder()
+        builder.model_call()
+        trace = builder.build()
+
+        ok = build_finding(
+            trace=trace,
+            detector="retry_storm",
+            severity="warning",
+            summary="s",
+            metrics={"kinds": "mixed"},
+            span_seqs=[0],
+            agent_ids=["root"],
+        )
+        assert ok.metrics["kinds"] == "mixed"
+
+        for payload in ("<script>alert(1)</script>", "Not A Slug", "AKIAIOSFODNN7EXAMPLE", "é"):
+            with pytest.raises(ValidationError):
+                build_finding(
+                    trace=trace,
+                    detector="retry_storm",
+                    severity="warning",
+                    summary="s",
+                    metrics={"kinds": payload},
+                    span_seqs=[0],
+                    agent_ids=["root"],
+                )
+
+    def test_r16_the_trace_derived_key_still_admits_only_a_constrained_name(self) -> None:
+        """R16: ``tool_name`` is R16-shaped or one of the two sentinels, never raw."""
+        from swarm_observer.detect.base import build_finding
+
+        from .synthetic_traces import TraceBuilder
+
+        builder = TraceBuilder()
+        builder.model_call()
+        trace = builder.build()
+
+        def make(value: str) -> Finding:
+            return build_finding(
+                trace=trace,
+                detector="failed_tool_call",
+                severity="info",
+                summary="s",
+                metrics={"tool_name": value},
+                span_seqs=[0],
+                agent_ids=["root"],
+            )
+
+        for legal in ("Bash", "mcp:server.tool-name", NON_CONFORMING_TOOL_NAME, UNKNOWN_TOOL_NAME):
+            assert make(legal).metrics["tool_name"] == legal
+        # The newline is the increment-1 B5 trap: Python's ``$`` matches before
+        # one, so a guard using ``match`` would let it through.
+        for illegal in ("Bash\n", "<script>", "9leading", "", "a" * 65):
+            with pytest.raises(ValidationError):
+                make(illegal)
+
+    def test_r16_a_credential_shaped_tool_name_reaches_metrics_verbatim(self) -> None:
+        """R16 (review S13): the known exposure, named and ledgered.
+
+        ``AKIAIOSFODNN7EXAMPLE`` and ``sk-ant-api03-…`` both match R16's pattern
+        exactly, so they reach ``metrics['tool_name']`` verbatim — R16 is doing
+        what it says.
+
+        The requirement that promises credential-shaped payloads appear nowhere
+        in a rendered report, and the requirement that would have to redact
+        ``metrics`` for that to be true, both belong to increment 4 and are
+        deliberately *not* cited here: naming them would satisfy the R52
+        traceability check without testing them, which is the exact green-while-
+        unable-to-fail shape this project keeps shipping. The debt is carried by
+        ``metrics_redaction_dropped`` in the canary ledger instead.
+
+        What this test does assert is that the exposure exists, so it cannot be
+        closed silently or forgotten.
+        """
+        from swarm_observer.detect.base import constrain_tool_name
+
+        from .test_suite_integrity import REQUIRED_CANARIES
+
+        for credential in ("AKIAIOSFODNN7EXAMPLE", "sk-ant-api03-notarealkey"):
+            value, overflow = constrain_tool_name(credential)
+            assert value == credential, "R16's guard is about shape, not about secrets"
+            assert overflow is None, "a conforming name is not pushed into previews"
+        assert "tool_name" in TRACE_DERIVED_METRIC_KEYS
+        assert REQUIRED_CANARIES.get("metrics_redaction_dropped") == 4
+
+    def test_r15_the_id_payload_is_ascii_whatever_the_metric_holds(self) -> None:
+        """R15: ``ensure_ascii=True`` — recomputed from the requirement's own text.
+
+        ``Finding`` now refuses a non-ASCII metric, so the only way to observe
+        this clause is on :func:`finding_id` directly, which is public API. The
+        expected digest is built from R15's serialization here rather than
+        pinned as a literal, so the test states the requirement instead of
+        recording an output.
+        """
+        import hashlib
+        import json
+
+        from swarm_observer.detect.base import finding_id
+
+        metrics: dict[str, int | str] = {"tool_name": "café"}
+        payload = json.dumps(
+            {"trace": "0" * 16, "detector": "x", "metrics": metrics, "spans": [1]},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        assert payload.isascii()
+        expected = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+        assert (
+            finding_id(trace_id="0" * 16, detector="x", metrics=metrics, span_seqs=[1])
+            == f"x:{expected}"
+        )
 
 
 class TestDegenerateTracesR13:

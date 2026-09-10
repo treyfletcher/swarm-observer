@@ -71,6 +71,27 @@ NON_CONFORMING_TOOL_NAME = "<non-conforming>"
 #: enumerated slug, not trace-derived text.
 UNKNOWN_TOOL_NAME = "<unknown>"
 
+#: R16: the ``metrics`` keys whose string value originates in the trace rather
+#: than in this package. **Exactly one in v1**, and naming it here is the point:
+#: R16's guard on ``tool_name`` is a *shape* check, so a credential-shaped
+#: string that happens to be a legal tool name — ``AKIAIOSFODNN7EXAMPLE``,
+#: ``sk-ant-api03-…`` — passes it and reaches ``metrics`` verbatim. R51 promises
+#: credential-shaped payloads appear nowhere in a rendered report, so R33's
+#: redaction has to run over these values and not only over ``previews``.
+#: Increment 1's review found the same class of defect one layer down (a guard
+#: that accepted an AWS key id as a "safe" class name); this constant exists so
+#: the renderer consumes a machine-readable list instead of remembering a
+#: sentence. Every *other* string in ``metrics`` is an enumerated slug this
+#: package authored, and :class:`Finding` refuses anything else.
+TRACE_DERIVED_METRIC_KEYS: frozenset[str] = frozenset({"tool_name"})
+
+#: The shape of a metrics string value swarm-observer authored itself.
+_AUTHORED_METRIC_VALUE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+#: The two enumerated stand-ins a trace-derived metric key may carry instead of
+#: a recorded name.
+_TOOL_NAME_SENTINELS = (NON_CONFORMING_TOOL_NAME, UNKNOWN_TOOL_NAME)
+
 # ``fullmatch``, not ``match``: Python's ``$`` also matches immediately before a
 # trailing newline, so ``match`` would admit ``"Bash\n"`` as a conforming tool
 # name and put a newline into a metrics value that R34 will later render. The
@@ -147,7 +168,32 @@ class Finding(BaseModel):
             raise ValueError("metrics keys must be sorted")
         if self.finding_id.split(":", 1)[0] != self.detector:
             raise ValueError("finding_id must be prefixed with its detector slug")
+        self._authored_metrics()
         return self
+
+    def _authored_metrics(self) -> None:
+        """R16: only :data:`TRACE_DERIVED_METRIC_KEYS` may carry a recorded value.
+
+        A property of the model rather than of the detector that happened to
+        build it, because R16's guarantee — "a reader skimming the findings
+        table is reading bytes this codebase authored" — is only worth anything
+        if *every* construction path is subject to it. The increment-1 review's
+        theme was guards that were right about the call path that existed, and a
+        `constrain_tool_name` call each detector has to remember is exactly that
+        shape.
+        """
+        for key, value in self.metrics.items():
+            if not isinstance(value, str):
+                continue
+            if key in TRACE_DERIVED_METRIC_KEYS:
+                if value in _TOOL_NAME_SENTINELS or _TOOL_NAME_OK.fullmatch(value):
+                    continue
+                raise ValueError(f"metrics[{key!r}] is trace-derived and must be R16-constrained")
+            if not _AUTHORED_METRIC_VALUE.fullmatch(value):
+                raise ValueError(
+                    f"metrics[{key!r}] is not a trace-derived key, so its value must be "
+                    "an enumerated slug this package authored (R16)"
+                )
 
 
 class Detector(Protocol):
@@ -379,6 +425,7 @@ __all__ = [
     "SEVERITIES",
     "SEVERITY_RANK",
     "TOOL_NAME_PATTERN",
+    "TRACE_DERIVED_METRIC_KEYS",
     "UNKNOWN_TOOL_NAME",
     "Detector",
     "DetectorConfig",

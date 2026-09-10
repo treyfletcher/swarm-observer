@@ -19,7 +19,7 @@
     "tests/test_detector_registry_integrity.py": 29,
     "tests/test_guard_verification.py": 39,
     "tests/test_identity_order_previews.py": 61,
-    "tests/test_json_report.py": 123,
+    "tests/test_json_report.py": 128,
     "tests/test_model_schema.py": 89,
     "tests/test_rate_snapshot.py": 145,
     "tests/test_reader_and_limits.py": 91,

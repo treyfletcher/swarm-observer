@@ -428,7 +428,16 @@ def report_document(
             "trace_last_timestamp": last_timestamp(trace),
             "source_files": [
                 {
-                    "name": source.name,
+                    # Not trace-derived — a filename comes from the filesystem —
+                    # but attacker-influenceable all the same: `analyze <dir>`
+                    # reads whatever basenames the directory holds, and R47
+                    # already restricts this to the basename. It goes through the
+                    # same boundary as every other untrusted string rather than
+                    # relying on JSON quoting, because increment 4 renders this
+                    # field into HTML and "a filename is not trace-derived" is
+                    # exactly the reading that would put it there raw. See the
+                    # review's ruling on the tester's S21.
+                    "name": identifier(source.name),
                     "sha256": source.sha256,
                     "bytes": source.bytes,
                     "records": source.records,

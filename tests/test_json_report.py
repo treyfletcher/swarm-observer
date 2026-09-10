@@ -95,9 +95,11 @@ def render_of(trace: Trace, *, previews: bool = True, findings: tuple[Finding, .
     )
 
 
-def document_of(trace: Trace, *, previews: bool = True) -> dict[str, Any]:
+def document_of(
+    trace: Trace, *, previews: bool = True, findings: tuple[Finding, ...] = ()
+) -> dict[str, Any]:
     """The same document as parsed JSON."""
-    return json.loads(render_of(trace, previews=previews))
+    return json.loads(render_of(trace, previews=previews, findings=findings))
 
 
 def string_leaves(node: Any, path: str = "") -> list[tuple[str, str]]:
@@ -123,44 +125,50 @@ def sentinel_paths(document: dict[str, Any]) -> set[str]:
     return {path for path, value in string_leaves(document) if SENTINEL in value}
 
 
-def sentinel_trace() -> Trace:
+def sentinel_trace(token: str = SENTINEL) -> Trace:
     """A trace whose every trace-derived string carries a distinct sentinel.
 
     Ids and enumerated values are *not* sentinelled: ``span_id`` is a digest
     (R5), ``kind`` and ``tool_result_status`` are enumerations this package
     authored, and ``tool_input_digest`` is a hash of the arguments (R7). The
     fields below are the ones whose bytes came out of the trace.
+
+    ``token`` is a review addition. With :data:`CREDENTIAL` it produces the same
+    trace with a real AWS key shape in every one of those fields — legal in all
+    of them, because it satisfies R2's agent-id alphabet, R16's tool-name
+    pattern and R10's detail-slug shape — which is what turns the sweep below
+    from "a sentinel leaks here" into "a credential does not leak anywhere".
     """
-    agent = f"{SENTINEL}-AGENT"
-    parent = f"{SENTINEL}-PARENTAGENT"
+    agent = f"{token}-AGENT"
+    parent = f"{token}-PARENTAGENT"
     builder = TraceBuilder()
     builder.model_call(
         agent_id=agent,
-        model=f"{SENTINEL}-MODEL",
+        model=f"{token}-MODEL",
         usage=TokenUsage(input_tokens=5),
-        text_preview=f"{SENTINEL}-TEXTPREVIEW",
+        text_preview=f"{token}-TEXTPREVIEW",
         start_ms=0,
         end_ms=1000,
     )
     error_span = builder.model_call(
         agent_id=agent,
-        model=f"{SENTINEL}-ERRORMODEL",
-        error=SpanError(code="api_error", detail=f"{SENTINEL}-ERRORDETAIL"),
+        model=f"{token}-ERRORMODEL",
+        error=SpanError(code="api_error", detail=f"{token}-ERRORDETAIL"),
     )
-    builder.replace(error_span, stop_reason=f"{SENTINEL}-STOPREASON")
+    builder.replace(error_span, stop_reason=f"{token}-STOPREASON")
     tool = builder.tool_call(
         agent_id=agent,
-        tool_name=f"{SENTINEL}.TOOLNAME",
-        input_preview=f"{SENTINEL}-INPUTPREVIEW",
-        result_preview=f"{SENTINEL}-RESULTPREVIEW",
+        tool_name=f"{token}.TOOLNAME",
+        input_preview=f"{token}-INPUTPREVIEW",
+        result_preview=f"{token}-RESULTPREVIEW",
     )
-    builder.replace(tool, tool_use_id=f"{SENTINEL}-TOOLUSEID")
+    builder.replace(tool, tool_use_id=f"{token}-TOOLUSEID")
     # One span the cost engine can actually price, so ``cost.spans[]`` is
     # populated and the sweep can see the fields on a priced row too.
     builder.model_call(
         agent_id=agent, model="claude-haiku-4-5", usage=TokenUsage(input_tokens=1_000)
     )
-    builder.warning("unknown_record_type", 1, f"{SENTINEL}-WARNDETAIL")
+    builder.warning("unknown_record_type", 1, f"{token}-WARNDETAIL")
     trace = builder.build()
     return trace.model_copy(
         update={
@@ -168,8 +176,8 @@ def sentinel_trace() -> Trace:
                 AgentRun(
                     agent_id=agent,
                     agent_index=0,
-                    agent_type=f"{SENTINEL}-AGENTTYPE",
-                    description=f"{SENTINEL}-DESCRIPTION",
+                    agent_type=f"{token}-AGENTTYPE",
+                    description=f"{token}-DESCRIPTION",
                     parent_agent_id=parent,
                     depth=1,
                     span_seqs=(0, 1, 2, 3),
@@ -177,7 +185,7 @@ def sentinel_trace() -> Trace:
             ),
             "source_files": (
                 SourceFile(
-                    name=f"{SENTINEL}-SOURCEFILE.jsonl",
+                    name=f"{token}-SOURCEFILE.jsonl",
                     sha256="0" * 64,
                     bytes=10,
                     records=3,
@@ -187,6 +195,60 @@ def sentinel_trace() -> Trace:
     )
 
 
+def sentinel_findings(trace: Trace, token: str = SENTINEL) -> tuple[Finding, ...]:
+    """One finding whose every trace-derived field carries a sentinel.
+
+    Added by review. Without it the sweep below rendered a document with
+    ``findings: []``, so the **entire findings section** — the part of a report
+    a reader trusts most (R16) — sat outside the set comparison that exists to
+    notice a new trace-derived field. That is this project's first signature
+    defect exactly: a fixture set with no case that could trip the check.
+    ``findings[].agent_ids`` was reaching the document raw and the sweep could
+    not see it.
+    """
+    return (
+        build_finding(
+            trace=trace,
+            detector="repeated_tool_call",
+            severity="warning",
+            summary="2 identical tool calls",
+            span_seqs=(2,),
+            agent_ids=(f"{token}-AGENT",),
+            metrics={"occurrences": 2, "tool_name": f"{token}.TOOLNAME"},
+            previews=(f"{token}-FINDINGPREVIEW",),
+            wasted=TokenUsage(input_tokens=5),
+        ),
+    )
+
+
+def sentinel_document(*, previews: bool) -> dict[str, Any]:
+    """The sweep's document: the sentinel trace **and** its sentinel finding."""
+    trace = sentinel_trace()
+    return document_of(trace, previews=previews, findings=sentinel_findings(trace))
+
+
+#: The credential the shape sweep uses. It matches R2's agent-id alphabet, R16's
+#: tool-name pattern and R10's warning-detail slug shape, so it can legally
+#: occupy every field a sentinel occupies — which is what makes the sweep below
+#: a statement about the redactor rather than about one field.
+CREDENTIAL = "AKIAIOSFODNN7EXAMPLE"
+
+
+def credential_document(*, previews: bool) -> str:
+    """The sentinel document with every sentinel replaced by a real key shape.
+
+    The sweep over :data:`LEAKING_PATHS` is a *set comparison against a
+    checked-in list*, which means a red suite in increment 4 can be turned green
+    by adding a line to that list rather than by fixing the leak. This is the
+    check that cannot be silenced that way: it names no paths at all, so there
+    is nothing to widen, and it asserts the property that actually matters.
+    However the ``--no-previews`` question is eventually settled, a credential
+    shape may not reach the document at any path, in either mode.
+    """
+    trace = sentinel_trace(CREDENTIAL)
+    return render_of(trace, previews=previews, findings=sentinel_findings(trace, CREDENTIAL))
+
+
 #: The paths at which a sentinel still reaches ``report.json`` under
 #: ``--no-previews``. Checked in deliberately: this set is a bug report, not a
 #: contract. Every entry is a trace-derived string that neither ``free_text``
@@ -194,6 +256,11 @@ def sentinel_trace() -> Trace:
 #: not listed means a *new* trace-derived field escaped the guard.
 LEAKING_PATHS: frozenset[str] = frozenset(
     {
+        # Trace-derived identifiers. Review routed all of these through R33's
+        # redactor in both modes; they are still listed because they are not
+        # *blanked* under the flag, which is the half that stays open. See
+        # `json_out.identifier` for why blanking a join key is refused, and
+        # `LEAK_LEDGER_SIZE` below for why this list may not grow quietly.
         "agents[].agent_id",
         "agents[].parent_agent_id",
         "cost.by_agent[].agent_id",
@@ -201,12 +268,28 @@ LEAKING_PATHS: frozenset[str] = frozenset(
         "cost.unpriced[].agent_id",
         "spans[].agent_id",
         "warnings[].detail",
+        # Added by review, not by the tester's sweep, and not because anything
+        # regressed: the sweep rendered `findings: []`, so the whole findings
+        # section was outside it. Both are the same identifier/metrics carve-out
+        # as above — `metrics` deliberately so (A-c7: R15 hashes it into the
+        # finding_id the same document prints).
+        "findings[].agent_ids[]",
+        "findings[].metrics.tool_name",
         # A source file's basename is path-derived rather than trace-derived, and
-        # R47 already restricts it to a basename. Listed because the sweep cannot
-        # tell the two apart from the bytes alone.
+        # R47 already restricts it to a basename. Review routed it through the
+        # redactor too (the tester's S21); it is not blanked, because a report
+        # that cannot say which files it read is not a report.
         "meta.source_files[].name",
     }
 )
+
+#: The ledger's size, pinned as a literal. ``LEAKING_PATHS`` is compared as a
+#: **set**, which makes a new leak in increment 4 fail the suite — and makes
+#: "add a line to the list" a way to turn that red suite green again. Adding a
+#: line now costs two edits in two places with this comment between them, which
+#: is the same friction A11 puts on ``collection_floor.json`` and for the same
+#: reason. It may be **lowered** freely; raising it is a reviewer's call.
+LEAK_LEDGER_SIZE = 10
 
 
 class TestJsonEmissionR36:
@@ -596,7 +679,7 @@ class TestNoPreviewsGuardR38:
 
     def test_r38_the_sentinel_trace_is_loaded_in_the_first_place(self) -> None:
         """R38: the sweep's premise — every field below really carries a marker."""
-        surviving = sentinel_paths(document_of(sentinel_trace(), previews=True))
+        surviving = sentinel_paths(sentinel_document(previews=True))
         assert surviving >= {
             "spans[].model",
             "spans[].stop_reason",
@@ -610,7 +693,28 @@ class TestNoPreviewsGuardR38:
             "agents[].description",
             "cost.unpriced[].model",
             "warnings[].detail",
+            # Review: the findings section, which the sweep did not reach at all
+            # until `sentinel_findings` existed.
+            "findings[].agent_ids[]",
+            "findings[].previews[]",
+            "findings[].metrics.tool_name",
         }, surviving
+
+    def test_r38_the_sweep_reaches_every_section_of_the_document(self) -> None:
+        """R38: the premise behind the premise — no whole section is unswept.
+
+        Added by review. The sweep is a set comparison over field paths, and a
+        section that renders nothing contributes no paths and therefore cannot
+        contribute a *missing* path either. `findings[]` was empty for the whole
+        increment, which is how `findings[].agent_ids` reached the document raw
+        without anything going red. Asserting the sections directly means the
+        next empty one is a failure rather than a silence.
+        """
+        document = sentinel_document(previews=True)
+        for section in ("agents", "spans", "findings", "warnings"):
+            assert document[section], f"{section} is empty: the sweep cannot see it"
+        for section in ("by_agent", "by_model", "spans", "unpriced"):
+            assert document["cost"][section], f"cost.{section} is empty: the sweep cannot see it"
 
     def test_r38_no_new_trace_derived_field_escapes_the_guard(self) -> None:
         """R38: the sweep, as a set comparison over field paths.
@@ -621,21 +725,78 @@ class TestNoPreviewsGuardR38:
         path is a new hole and an absent one is a fix that should shrink the
         list in the same commit.
         """
-        surviving = sentinel_paths(document_of(sentinel_trace(), previews=False))
+        surviving = sentinel_paths(sentinel_document(previews=False))
         assert surviving == set(LEAKING_PATHS), (
             f"unexpected: {sorted(surviving - LEAKING_PATHS)}; "
             f"fixed: {sorted(set(LEAKING_PATHS) - surviving)}"
         )
 
+    def test_r38_the_leak_ledger_has_not_been_widened(self) -> None:
+        """R38: the ledger is a bug report and may only shrink.
+
+        Added by review. The set comparison above goes red when a new
+        trace-derived field escapes the guard — and goes green again if somebody
+        adds that field's path to ``LEAKING_PATHS``. That is the same shape as a
+        self-chosen mutation set: a check whose subject is chosen by whoever
+        needs it to pass. Pinning the size as a literal does not make widening
+        impossible; it makes it a deliberate two-place edit with the reason
+        written between them, which is exactly the friction A11 puts on the
+        collection floor.
+        """
+        assert len(LEAKING_PATHS) == LEAK_LEDGER_SIZE, (
+            "LEAKING_PATHS changed size. Shrinking it is a fix — lower "
+            "LEAK_LEDGER_SIZE in the same commit. Growing it is a new leak, and "
+            "needs a reason in the review, not a line in the list."
+        )
+
+    @pytest.mark.parametrize("previews", [True, False], ids=["default", "no-previews"])
+    def test_r33_no_credential_shape_reaches_the_document_at_any_path(self, previews: bool) -> None:
+        """R33: the arm that cannot be silenced by editing a list.
+
+        Added by review, as the answer to "what makes ``LEAKING_PATHS`` red, and
+        what could quietly make it green again?". This test names **no paths**,
+        so there is nothing to widen. It renders the same trace with a real AWS
+        key shape in every field a sentinel occupies — legal in all of them,
+        because ``AKIAIOSFODNN7EXAMPLE`` satisfies R2's agent-id alphabet, R16's
+        tool-name pattern and R10's detail-slug shape — and asserts the shape
+        appears nowhere, in either mode.
+
+        However the ``--no-previews`` question in ``LEAKING_PATHS`` is settled,
+        this property must hold. It is the security half of that ledger, stated
+        so that a fix to the *display* half cannot be mistaken for it.
+        """
+        text = credential_document(previews=previews)
+        assert CREDENTIAL not in text
+        assert marker("aws_key_id") in text
+
+    def test_r33_the_credential_sweep_would_notice_a_field_that_skipped_the_boundary(
+        self,
+    ) -> None:
+        """R33: the credential sweep's own control arm.
+
+        A test asserting a string is absent is satisfied perfectly by a renderer
+        that emits nothing. The same document, rendered with the sentinel token
+        instead of the credential, must contain that token at every path the
+        credential run would have — so the fields really are populated and the
+        absence above is redaction rather than emptiness.
+        """
+        credential_paths = {
+            path
+            for path, value in string_leaves(json.loads(credential_document(previews=True)))
+            if marker("aws_key_id") in value
+        }
+        assert credential_paths >= sentinel_paths(sentinel_document(previews=False))
+
     def test_r38_the_previews_arm_is_the_one_that_makes_it_non_vacuous(self) -> None:
         """R38: without the flag the same fields *do* carry their text."""
-        with_previews = sentinel_paths(document_of(sentinel_trace(), previews=True))
-        without = sentinel_paths(document_of(sentinel_trace(), previews=False))
+        with_previews = sentinel_paths(sentinel_document(previews=True))
+        without = sentinel_paths(sentinel_document(previews=False))
         assert without < with_previews
         assert with_previews - without == {
             "agents[].agent_type",
             "agents[].description",
             "cost.unpriced[].model",
+            "findings[].previews[]",
             "spans[].error.detail",
             "spans[].model",
             "spans[].stop_reason",
@@ -661,7 +822,7 @@ class TestNoPreviewsGuardR38:
     )
     def test_r38_no_trace_derived_string_survives_the_flag(self) -> None:
         """R38: "omits trace free text entirely", read as governing every field."""
-        assert sentinel_paths(document_of(sentinel_trace(), previews=False)) == set()
+        assert sentinel_paths(sentinel_document(previews=False)) == set()
 
     def test_r33_a_credential_shaped_agent_id_is_redacted_in_both_modes(self) -> None:
         """R33 (BUG-2, fixed in review): an agent id is trace-derived.

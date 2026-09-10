@@ -672,6 +672,12 @@ class TestScaleR13:
         assert len(found) < 100
         assert all(len(item.span_seqs) <= MAX_EVIDENCE_SPANS for item in found)
 
+    #: Below this many seconds a measurement is timer noise on a shared runner,
+    #: not a measurement. A growth ratio taken against a smaller number than this
+    #: is a coin flip — which is how these two pins first went flaky, and a check
+    #: that fails at random is one people learn to re-run rather than read.
+    NOISE_FLOOR_SECONDS = 0.02
+
     @staticmethod
     def _time(detector: Any, trace: Trace) -> float:
         started = time.perf_counter()
@@ -686,27 +692,33 @@ class TestScaleR13:
         size of a transcript, not an adversarial one.
 
         Two bounds, because each catches what the other cannot. The *ratio*
-        catches a regression on a slow shared runner, where an absolute number
-        would be noise. The *ceiling* catches a regression that happens to
-        scale both measurements together — and it is a real number rather than
-        a comfortable one: the quadratic form took 9.2 s on this input, the
-        linear form takes about 0.04 s, and the bound sits between them with
-        room on both sides.
+        survives a slow shared runner, where an absolute number would not: both
+        measurements scale together. The *ceiling* catches a regression that
+        scaled both — and it is a real number rather than a comfortable one:
+        the quadratic form took 9.2 s on this input and the linear form takes
+        about 0.02 s.
+
+        The ratio's denominator is floored at :data:`NOISE_FLOOR_SECONDS`. The
+        linear form runs the small case in about 0.004 s, which is timer noise,
+        and a ratio against noise is a coin flip — this pin failed once that way
+        before the floor went in. Under the floor the ratio still fails on the
+        quadratic form, whose small case takes 0.43 s and is nowhere near it.
         """
         from swarm_observer.detect.registry import detector_by_slug
 
         from .synthetic_traces import error_run
 
         storm = detector_by_slug("retry_storm")
-        small = max(self._time(storm, error_run(5_000, range(5_000))), 1e-4)
+        small = self._time(storm, error_run(5_000, range(5_000)))
         large = self._time(storm, error_run(20_000, range(20_000)))
         assert large < 2.0, (
             f"20,000 error spans took {large:.2f}s; the quadratic form took ~9.2s "
-            "and the linear form takes ~0.04s"
+            "and the linear form takes ~0.02s"
         )
-        assert large < small * 8.0, (
-            f"4x the spans cost {large / small:.1f}x the time "
-            f"({small:.3f}s -> {large:.3f}s); linear would be ~4x"
+        budget = max(small, self.NOISE_FLOOR_SECONDS) * 8.0
+        assert large < budget, (
+            f"4x the spans cost {large:.3f}s against a budget of {budget:.3f}s "
+            f"(small case {small:.3f}s); linear would be ~4x, quadratic ~16x"
         )
 
     def test_r23_blocked_agent_does_not_grow_quadratically(self) -> None:
@@ -717,8 +729,14 @@ class TestScaleR13:
         other agents' intervals is now built once per agent and queried per gap,
         rather than clipped and sorted afresh for each of them.
 
-        Same pair of bounds as the R20 pin: the quadratic form took 8.3 s on the
-        10,000-span case and the indexed form takes about 0.24 s.
+        Same pair of bounds as the R20 pin, with the same noise floor under the
+        ratio: the quadratic form took 8.3 s on the 10,000-span case and the
+        indexed form takes about 0.24 s.
+
+        That 0.24 s is not the union any more — profiling puts almost all of it
+        in constructing the ~10,000 findings this trace legitimately produces,
+        one per gap, which is linear in the output. The union build is 0.024 s
+        for both agents and the 10,000 queries are 0.029 s between them.
         """
         from swarm_observer.detect.registry import detector_by_slug
 
@@ -737,31 +755,38 @@ class TestScaleR13:
                 )
             return builder.build()
 
-        small = max(self._time(blocked, alternating(1_250)), 1e-4)
+        small = self._time(blocked, alternating(1_250))
         large = self._time(blocked, alternating(5_000))
         assert large < 2.0, (
             f"10,000 spans took {large:.2f}s; the quadratic form took ~8.3s "
             "and the indexed form takes ~0.24s"
         )
-        assert large < small * 8.0, (
-            f"4x the spans cost {large / small:.1f}x the time "
-            f"({small:.3f}s -> {large:.3f}s); linear would be ~4x"
+        budget = max(small, self.NOISE_FLOOR_SECONDS) * 8.0
+        assert large < budget, (
+            f"4x the spans cost {large:.3f}s against a budget of {budget:.3f}s "
+            f"(small case {small:.3f}s); linear would be ~4x, quadratic ~16x"
         )
 
-    def test_r13_the_other_five_detectors_are_not_quadratic(self) -> None:
-        """R13: the growth check is not vacuous — five detectors pass it today."""
+    def test_r13_no_detector_grows_quadratically(self) -> None:
+        """R13: the growth check covers the whole registry, with no exemptions.
+
+        Both quadratic detectors are fixed, so the exemption list this test
+        used to carry is gone. An exempt-list on a guard is the shape that lets
+        a defect become permanent: it was written to record two known bugs and
+        would have kept them recorded after they were fixed.
+        """
         from swarm_observer.detect.registry import detector_by_slug
 
-        quadratic = {"retry_storm", "blocked_agent"}
         small = self._wide_trace(1_250)
         large = self._wide_trace(5_000)
         for slug in DETECTOR_SLUGS:
-            if slug in quadratic:
-                continue
             detector = detector_by_slug(slug)
-            base = max(self._time(detector, small), 1e-4)
+            base = self._time(detector, small)
             grown = self._time(detector, large)
-            assert grown < base * 12.0, f"{slug}: 4x the spans cost {grown / base:.1f}x the time"
+            budget = max(base, self.NOISE_FLOOR_SECONDS) * 12.0
+            assert grown < budget, (
+                f"{slug}: 4x the spans cost {grown:.3f}s against a budget of {budget:.3f}s"
+            )
 
 
 def test_r15_unicode_tool_names_do_not_collide_in_finding_ids() -> None:

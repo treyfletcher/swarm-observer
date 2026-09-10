@@ -222,7 +222,18 @@ class DetectorWaste(_Frozen):
     #: Findings whose attributed model calls include one this engine could not
     #: price, so their cost is unknown rather than zero.
     findings_unpriced: int = Field(ge=0)
+    #: R17's quantity: the element-wise sum over the **distinct** attributed
+    #: model calls, with no reference to whether a rate exists for them. This
+    #: summed only the *priced* ones until review, so the per-detector token
+    #: column contradicted ``Finding.wasted`` for the same findings, in the same
+    #: document, with nothing marking it as a subset.
     wasted: TokenUsage
+    #: The part of :attr:`wasted` carried by attributed calls this engine could
+    #: not price — the same shape :class:`AgentCost` uses, and the field that
+    #: makes ``wasted_cost_usd`` legible: it prices ``wasted`` minus this.
+    wasted_unpriced: TokenUsage = TokenUsage()
+    #: The cost of the priced part of :attr:`wasted` only. Money can only be
+    #: reported for spans that have a rate; tokens are reported for all of them.
     wasted_cost_usd: Decimal
 
 
@@ -443,7 +454,6 @@ def compute_costs(
         )
 
     cost_by_seq = {item.seq: item.cost_usd for item in priced}
-    usage_by_seq = {item.seq: item.usage for item in priced}
 
     return CostReport(
         meta=source.meta,
@@ -456,7 +466,7 @@ def compute_costs(
         unpriced=tuple(unpriced),
         by_agent=_by_agent(trace, priced, unpriced),
         by_model=_by_model(priced),
-        by_detector=_by_detector(trace, attributed, cost_by_seq, usage_by_seq),
+        by_detector=_by_detector(trace, attributed, cost_by_seq),
         waste_by_finding=_waste_by_finding(trace, attributed, cost_by_seq),
     )
 
@@ -549,7 +559,6 @@ def _by_detector(
     trace: Trace,
     attributed: Mapping[str, Sequence[int]],
     cost_by_seq: Mapping[int, Decimal],
-    usage_by_seq: Mapping[int, TokenUsage],
 ) -> tuple[DetectorWaste, ...]:
     """R31: attributed waste per detector, ordered by slug.
 
@@ -557,6 +566,15 @@ def _by_detector(
     number is an attribution of the same tokens under two different readings
     (A7's intentional detector overlap), not a bill. Within one detector the
     spans are deduplicated, so a detector cannot double-count its own evidence.
+
+    ``wasted`` is **R17's quantity** — the sum over every distinct attributed
+    ``model_call`` with a recorded usage, priced or not. It summed only the
+    priced ones until review, which meant a detector row and the findings it
+    aggregates reported different token totals in the same document with
+    nothing saying the second was a subset (review, BUG-4). Money is still
+    reported only for the spans that have a rate, because money for a span with
+    no rate does not exist; ``wasted_unpriced`` names the difference, which is
+    the shape :class:`AgentCost` already uses for exactly this.
     """
     slugs = sorted({_detector_of(finding_id) for finding_id in attributed})
     rows: list[DetectorWaste] = []
@@ -572,18 +590,31 @@ def _by_detector(
                 unknown += 1
                 continue
             costs.append(sum_usd(cost_by_seq[seq] for seq in relevant))
+        ordered = sorted(seqs)
         rows.append(
             DetectorWaste(
                 detector=slug,
                 findings=len(mine),
                 findings_unpriced=unknown,
-                wasted=sum_usage(usage_by_seq[seq] for seq in sorted(seqs) if seq in usage_by_seq),
-                wasted_cost_usd=sum_usd(
-                    cost_by_seq[seq] for seq in sorted(seqs) if seq in cost_by_seq
+                # R17's own filter, not the pricing one: `_relevant_seqs` has
+                # already kept only `model_call` spans with a recorded usage, so
+                # reading the usage off the trace is the same set `Finding.wasted`
+                # summed. `usage_by_seq` covers priced spans only and is what made
+                # the two numbers disagree.
+                wasted=sum_usage(_usage_at(trace, seq) for seq in ordered),
+                wasted_unpriced=sum_usage(
+                    _usage_at(trace, seq) for seq in ordered if seq not in cost_by_seq
                 ),
+                wasted_cost_usd=sum_usd(cost_by_seq[seq] for seq in ordered if seq in cost_by_seq),
             )
         )
     return tuple(rows)
+
+
+def _usage_at(trace: Trace, seq: int) -> TokenUsage:
+    """The usage recorded on the span at ``seq`` (already filtered by R17's rule)."""
+    span = trace.spans[seq]
+    return span.usage if span.usage is not None else TokenUsage()
 
 
 __all__ = [

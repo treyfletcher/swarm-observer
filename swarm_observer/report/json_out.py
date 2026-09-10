@@ -359,6 +359,10 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
                 "findings": row.findings,
                 "findings_with_unknown_cost": row.findings_unpriced,
                 "wasted": usage_document(row.wasted),
+                # R17's total and the part of it with no rate, so a reader can
+                # see why the dollar figure beside them is smaller (review,
+                # BUG-4). `AgentCost` reports the same pair.
+                "wasted_unpriced": usage_document(row.wasted_unpriced),
                 "wasted_cost_usd": format_usd(row.wasted_cost_usd),
             }
             for row in cost.by_detector

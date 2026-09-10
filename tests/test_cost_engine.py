@@ -908,15 +908,6 @@ class TestWasteCostR31:
         assert row.findings_unpriced == 1
         assert row.wasted_cost_usd == ZERO_USD
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-4: DetectorWaste.wasted sums only the *priced* attributed spans, so the "
-            "per-detector token column contradicts R17's Finding.wasted for the same "
-            "findings. AgentCost.usage documents that restriction and has unpriced_usage "
-            "beside it; DetectorWaste has neither."
-        ),
-    )
     def test_r31_by_detector_wasted_tokens_equal_the_findings_it_aggregates(self) -> None:
         """R17/R31: the per-detector token total is what its findings reported.
 
@@ -932,21 +923,83 @@ class TestWasteCostR31:
         row = {r.detector: r for r in report.by_detector}["agent_loop"]
         assert row.wasted == attribute_waste(trace, (1, 2))
 
-    def test_r31_bug4_reproduces_as_a_priced_only_token_column_today(self) -> None:
-        """R17/R31: BUG-4 pinned as it currently behaves, beside its xfail.
+    def test_r31_by_detector_names_the_unpriced_part_of_its_own_token_total(self) -> None:
+        """R17/R31 (BUG-4, fixed in review): the row explains its own dollar figure.
 
-        The two numbers a reader would compare disagree, and nothing in the
-        document says the second is a subset of the first.
+        Replaces the reproduction that pinned the priced-only column. The three
+        numbers must decompose exactly: ``wasted`` is R17's quantity,
+        ``wasted_unpriced`` is the part of it with no rate, and
+        ``wasted_cost_usd`` prices the difference. Asserting only that
+        ``wasted`` grew would be satisfied by a row that reports the right token
+        total beside a dollar figure that still names neither.
         """
         trace = self.waste_trace()
-        key = "agent_loop:aaaaaaaaaaaa"
-        report = compute_costs(trace, SHIPPED, waste_seqs={key: (1, 2)})
+        report = compute_costs(trace, SHIPPED, waste_seqs={"agent_loop:aaaaaaaaaaaa": (1, 2)})
         row = {r.detector: r for r in report.by_detector}["agent_loop"]
-        assert attribute_waste(trace, (1, 2)) == TokenUsage(input_tokens=6_000)
-        assert row.wasted == TokenUsage(input_tokens=2_000), (
-            "BUG-4 appears to be fixed: delete this test and de-xfail the one above"
+        assert row.wasted == TokenUsage(input_tokens=6_000)
+        assert row.wasted_unpriced == TokenUsage(input_tokens=4_000)
+        assert row.wasted_cost_usd == oracle_for(
+            SHIPPED, "claude-haiku-4-5", TokenUsage(input_tokens=2_000)
         )
-        assert row.wasted_cost_usd > ZERO_USD
+        assert row.findings_unpriced == 1
+
+    def test_r31_a_fully_priced_row_reports_no_unpriced_waste(self) -> None:
+        """R31: the non-vacuous arm — ``wasted_unpriced`` is not a constant.
+
+        Driven at both ends: a row whose attributed calls are all priced reports
+        a zero there, so the field distinguishes "nothing unpriced" from
+        "everything unpriced" rather than always echoing ``wasted``.
+        """
+        trace = self.waste_trace()
+        report = compute_costs(trace, SHIPPED, waste_seqs={"agent_loop:aaaaaaaaaaaa": (0, 1)})
+        row = {r.detector: r for r in report.by_detector}["agent_loop"]
+        assert row.wasted_unpriced == TokenUsage()
+        assert row.wasted == attribute_waste(trace, (0, 1))
+        assert row.findings_unpriced == 0
+
+    def test_r31_the_decomposition_holds_over_the_whole_corpus(self) -> None:
+        """R17/R31: ``wasted`` = priced part + ``wasted_unpriced``, as an invariant.
+
+        A property over every fixture rather than a literal on one, because the
+        defect was a *definition* mismatch between two aggregations and a single
+        hand-built case cannot show it did not survive somewhere else.
+        """
+        rows = 0
+        with_unpriced = 0
+        for path in fixture_paths():
+            trace = load_trace(path)
+            run = run_detectors_with_waste(trace, DetectorConfig())
+            report = compute_costs(trace, SHIPPED, waste_seqs=run.waste_seqs)
+            for row in report.by_detector:
+                rows += 1
+                with_unpriced += 1 if row.wasted_unpriced.total else 0
+                seqs = sorted(
+                    {
+                        seq
+                        for fid, s in run.waste_seqs.items()
+                        if fid.startswith(f"{row.detector}:")
+                        for seq in s
+                    }
+                )
+                relevant = [
+                    seq
+                    for seq in seqs
+                    if trace.spans[seq].kind == "model_call" and trace.spans[seq].usage is not None
+                ]
+                priced = {item.seq for item in report.spans}
+                assert row.wasted == sum_usage(
+                    trace.spans[seq].usage for seq in relevant if trace.spans[seq].usage
+                )
+                assert row.wasted_unpriced == sum_usage(
+                    trace.spans[seq].usage
+                    for seq in relevant
+                    if seq not in priced and trace.spans[seq].usage
+                ), f"{path.stem}/{row.detector}"
+        # The corpus's own premise: an invariant that both sides of the
+        # decomposition satisfy trivially proves nothing, so the sweep is
+        # asserted to reach a row where the unpriced part is *not* zero.
+        assert rows >= 20, rows
+        assert with_unpriced >= 1, "no fixture attributes an unpriceable model call"
 
     def test_r31_the_same_span_attributed_by_two_detectors_counts_in_both(self) -> None:
         """A7: overlap is intentional; the number is an attribution, not a bill."""

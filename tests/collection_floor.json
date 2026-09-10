@@ -9,7 +9,7 @@
     "tests/test_boundaries_and_posture.py": 43,
     "tests/test_cli_analyze.py": 114,
     "tests/test_collapse_r9.py": 33,
-    "tests/test_cost_engine.py": 161,
+    "tests/test_cost_engine.py": 163,
     "tests/test_detector_adversarial.py": 98,
     "tests/test_detector_contract.py": 181,
     "tests/test_detector_corpus.py": 52,

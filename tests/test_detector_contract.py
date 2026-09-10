@@ -494,6 +494,56 @@ class TestFindingIdR15:
         )
         assert first == second
 
+    def test_r15_the_id_is_of_the_finding_as_stored_not_as_passed_in(self) -> None:
+        """R15, A-b11: ``build_finding`` normalizes before it hashes.
+
+        The assumption is stated in the PR write-up and was not asserted
+        anywhere: replacing ``span_seqs=ordered_spans`` with the caller's raw
+        list inside ``build_finding`` left the whole suite green (reviewer's
+        mutation sweep), because no test handed in a list that the normalizer
+        actually changed.
+
+        Three cases where it does change one — unsorted, duplicated, and longer
+        than the fifty-span cap — and in each the id must be the id of the
+        fifty sorted unique seqs the finding will render, not of what was
+        passed. Otherwise two detectors that assembled the same evidence in
+        different orders would get different suppression keys in v2, which is
+        the whole reason R15 exists.
+        """
+        builder = TraceBuilder()
+        for _ in range(60):
+            builder.model_call()
+        trace = builder.build()
+
+        def build(seqs: Any) -> Finding:
+            return build_finding(
+                trace=trace,
+                detector="agent_loop",
+                severity="warning",
+                summary="s",
+                metrics={"period": 1},
+                span_seqs=seqs,
+                agent_ids=["root"],
+            )
+
+        canonical = finding_id(
+            trace_id=trace.trace_id,
+            detector="agent_loop",
+            metrics={"period": 1},
+            span_seqs=list(range(50)),
+        )
+        raw_uncapped = finding_id(
+            trace_id=trace.trace_id,
+            detector="agent_loop",
+            metrics={"period": 1},
+            span_seqs=list(range(60)),
+        )
+        assert canonical != raw_uncapped, "the two payloads must differ for this to mean anything"
+
+        assert build(range(60)).finding_id == canonical
+        assert build(reversed(range(60))).finding_id == canonical
+        assert build([*range(60), 0, 1, 2]).finding_id == canonical
+
     @pytest.mark.parametrize(
         ("label", "changed"),
         [

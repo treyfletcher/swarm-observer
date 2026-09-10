@@ -815,6 +815,69 @@ class TestSharedTraceViewsR17:
             "sub": [1],
         }
 
+    def test_r13_spans_by_agent_never_names_a_span_that_is_not_the_agents(self) -> None:
+        """R13, R23: an ``AgentRun`` claiming another agent's span does not get it.
+
+        R2 says ``span_seqs`` is ascending and distinct and nothing more — not
+        that its entries are in range, not that the spans belong to that agent,
+        not that ``agent_id`` is unique across ``AgentRun``s. The v1 mapper
+        honours all three; ``detect/`` is downstream of R3's adapter seam and
+        must not depend on that unstated.
+
+        The concrete failure is a finding that names the wrong agent:
+        ``blocked_agent`` reports a gap between two spans as one agent's wait,
+        and here the second span belongs to somebody else.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="root", start_ms=0, end_ms=1_000)
+        builder.model_call(agent_id="sub", start_ms=600_000, end_ms=601_000)
+        trace = builder.build()
+        first, second = trace.agents
+        cross_claimed = trace.model_copy(
+            update={"agents": (first.model_copy(update={"span_seqs": (0, 1)}), second)}
+        )
+        assert [span.seq for span in spans_by_agent(cross_claimed)["root"]] == [0]
+        assert detector_by_slug("blocked_agent").run(cross_claimed, DetectorConfig()) == ()
+
+    def test_r13_spans_by_agent_ignores_a_seq_that_names_no_span(self) -> None:
+        """R13: an out-of-range ``span_seqs`` entry is not a bare ``IndexError``.
+
+        A detector is a pure function of the trace (R13); raising a raw
+        ``IndexError`` out of one is not a behaviour any requirement describes.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="root")
+        trace = builder.build()
+        broken = trace.model_copy(
+            update={
+                "agents": (trace.agents[0].model_copy(update={"span_seqs": (0, 99)}),),
+            }
+        )
+        assert [span.seq for span in spans_by_agent(broken)["root"]] == [0]
+        for detector in ALL_DETECTORS:
+            assert isinstance(detector.run(broken, DetectorConfig()), tuple)
+
+    def test_r13_two_agent_runs_sharing_an_id_do_not_erase_each_other(self) -> None:
+        """R13: a repeated ``agent_id`` merges rather than one silently winning.
+
+        With a plain dict comprehension the second ``AgentRun`` replaced the
+        first, so every per-agent detector — R19, R20, R22, R23 — simply stopped
+        seeing one agent's spans, with nothing anywhere saying so.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="root")
+        builder.model_call(agent_id="sub")
+        trace = builder.build()
+        first, second = trace.agents
+        collided = trace.model_copy(
+            update={"agents": (first, second.model_copy(update={"agent_id": "root"}))}
+        )
+        grouped = spans_by_agent(collided)
+        assert set(grouped) == {"root"}
+        assert [span.seq for span in grouped["root"]] == [0], (
+            "span 1 belongs to agent 'sub' by its own agent_id, so it is not merged in"
+        )
+
     def test_r17_model_calls_returns_only_model_calls_in_seq_order(self) -> None:
         """R13: the shared view is a filter, not a re-order."""
         builder = TraceBuilder()

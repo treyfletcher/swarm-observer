@@ -350,9 +350,40 @@ def spans_by_agent(trace: Trace) -> dict[str, tuple[Span, ...]]:
     Built from ``AgentRun.span_seqs`` (ascending by R2's validator) rather than
     by grouping spans, so the detectors and the report agree about what belongs
     to an agent.
+
+    Four detectors report ``agent_ids=[the key of this dict]`` about spans this
+    function handed them, so this is where a finding would come to name the
+    wrong agent. R2 constrains ``span_seqs`` to be ascending and distinct and
+    says nothing else about it: it does not require the entries to be in range,
+    it does not require the named span to *belong* to that agent, and it does
+    not require ``agent_id`` to be unique across ``AgentRun``s. The v1 mapper
+    satisfies all three, which is precisely why relying on them unstated is the
+    increment-1 defect ("right about the value it was written for") — and R3
+    exists so that a second adapter can be added without touching ``detect/``.
+
+    So the three assumptions are enforced here rather than assumed:
+
+    * a seq outside the span list is not a span (it was a bare ``IndexError``
+      out of a detector, which R13's purity contract has no room for);
+    * a seq naming a span whose own ``agent_id`` is different is not this
+      agent's span;
+    * two ``AgentRun``s sharing an id are one group, rather than the later one
+      silently erasing the earlier one's spans from every per-agent detector.
+
+    On any trace the v1 mapper produces the result is unchanged, by
+    construction and by the corpus digest.
     """
+    grouped: dict[str, dict[int, Span]] = {}
+    for agent in trace.agents:
+        owned = grouped.setdefault(agent.agent_id, {})
+        for seq in agent.span_seqs:
+            if not 0 <= seq < len(trace.spans):
+                continue
+            span = trace.spans[seq]
+            if span.agent_id == agent.agent_id:
+                owned[seq] = span
     return {
-        agent.agent_id: tuple(trace.spans[seq] for seq in agent.span_seqs) for agent in trace.agents
+        agent_id: tuple(spans[seq] for seq in sorted(spans)) for agent_id, spans in grouped.items()
     }
 
 

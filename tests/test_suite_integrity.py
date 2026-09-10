@@ -272,6 +272,108 @@ class TestCheckedInDataIsInterpreterStableR8:
         )
 
 
+class TestMutationLedgerR49:
+    """R49: ``tests/mutations.json`` is a checked-in guard, so it gets checked.
+
+    Added by the increment-3 review. The increment-2 review's amendment 2 put
+    the mutation set in the repository so the next sweep is a **re-run** rather
+    than a re-invention. A re-run is only possible while every anchor still
+    matches the source, and nothing asserted that: three anchors went stale
+    under the review's own fix commits (`M10`, `M18`, `W-J15`) and the only
+    signal was a `NOT-APPLIED` line in a sweep somebody happened to run.
+
+    A mutant whose anchor has drifted is a mutant that reports nothing — a
+    check that cannot fail, in the artefact this project adopted *because* of
+    checks that cannot fail. This is the cheapest possible step toward
+    amendment 4 (run the sweep in CI): it does not run the mutations, it asserts
+    they could be run.
+    """
+
+    LEDGER = REPO / "tests" / "mutations.json"
+
+    def ledger(self) -> dict[str, object]:
+        return json.loads(self.LEDGER.read_text(encoding="utf-8"))
+
+    def live_mutations(self) -> list[dict[str, str]]:
+        entries = self.ledger()["mutations"]
+        assert isinstance(entries, list)
+        return [item for item in entries if not item.get("retired")]
+
+    def test_r49_every_live_mutation_anchor_still_occurs_exactly_once(self) -> None:
+        """R49: the ledger is re-runnable, asserted rather than hoped.
+
+        Exactly once, not at least once: a sweep that applies an anchor matching
+        two places mutates only the first and reports a verdict for a mutation
+        it did not fully make.
+        """
+        drifted: list[str] = []
+        for item in self.live_mutations():
+            source = (REPO / item["module"]).read_text(encoding="utf-8")
+            if source.count(item["old"]) != 1:
+                drifted.append(f"{item['id']} ({source.count(item['old'])} matches)")
+        assert not drifted, (
+            "these mutation anchors no longer match their module exactly once, so a "
+            f"re-run would silently skip them: {drifted}"
+        )
+
+    def test_r49_every_mutation_actually_changes_its_module(self) -> None:
+        """R49: an anchor whose replacement equals it is a mutant that mutates nothing."""
+        for item in self.live_mutations():
+            assert item["old"] != item["new"], item["id"]
+
+    def test_r49_every_surviving_mutant_carries_its_reason(self) -> None:
+        """R49: a survivor is either equivalent-with-evidence or open-with-a-threat.
+
+        Amendment 2's shape. A survivor with no recorded reason is a number in a
+        report rather than a ledger entry, which is the thing the increment-2
+        adjudication ruled against.
+        """
+        for item in self.ledger()["mutations"]:  # type: ignore[union-attr]
+            if item["verdict"] in {"SURVIVED", "retired"}:
+                assert item.get("why_it_survives"), item["id"]
+
+    def test_r49_the_ledger_declares_a_control_arm_that_must_survive(self) -> None:
+        """R49/R50: the sweep's own canary — a no-op mutant whose survival is required.
+
+        A sweep with no control arm cannot distinguish "the tests killed these"
+        from "the harness reports failure regardless". Asserted as a property of
+        the ledger so a future wave cannot quietly drop it.
+        """
+        # ``control-no-op`` exactly, not a substring match: ``control-flow`` is a
+        # real operator whose mutants must be *killed*, and a loose match here
+        # would demand they survive. The distinction is the whole point of the
+        # arm, so it is spelled rather than pattern-matched.
+        controls = [item for item in self.live_mutations() if item["operator"] == "control-no-op"]
+        assert controls, "the ledger declares no control arm"
+        for item in controls:
+            assert item["verdict"] == "SURVIVED", (
+                f"{item['id']} is a declared no-op and a killed verdict means the harness "
+                "is not reporting verdicts that come from the mutation"
+            )
+
+    def test_r49_the_ledger_covers_every_module_the_increment_touched(self) -> None:
+        """R49: amendment 1's per-module floor, as a check rather than a table.
+
+        Every module under ``swarm_observer/`` that this increment's branch
+        created carries mutants. Asserted against the ledger's own module set so
+        a new module arriving in increment 4 with no mutants is visible.
+        """
+        modules = {item["module"] for item in self.live_mutations()}
+        for required in (
+            "swarm_observer/cost/compute.py",
+            "swarm_observer/cost/snapshot.py",
+            "swarm_observer/cost/source.py",
+            "swarm_observer/report/json_out.py",
+            "swarm_observer/report/redact.py",
+            "swarm_observer/cli/main.py",
+            "swarm_observer/detect/base.py",
+            "swarm_observer/detect/registry.py",
+        ):
+            assert required in modules, required
+            mine = [item for item in self.live_mutations() if item["module"] == required]
+            assert len(mine) >= 8, f"{required} has only {len(mine)} mutants"
+
+
 def test_r49_collection_floor_json_has_a_stable_shape() -> None:
     """R49: the floor file's shape is part of the contract, not an accident."""
     data = json.loads(COLLECTION_FLOOR_PATH.read_text(encoding="utf-8"))

@@ -16,6 +16,23 @@
 # Cited as of increment 2: R1-R25, R38 (schema subcommand), R44, R45, R48,
 # R49, R50, R52 — deleted below by the tester as each gained a test.
 #
+# Increment 3 (tester): R26-R31, R33, R36 and R40 leave the ledger. Two of
+# those are cited for *half* of what they define, and the next increment's
+# tester should read this before assuming they are finished:
+#   * R33 — the pattern table, its order and the idempotence property are
+#     covered (tests/test_redaction.py), and so is redaction at the JSON render
+#     boundary. R33 also governs the HTML boundary, which does not exist yet.
+#   * R36 — the JSON half only (tests/test_json_report.py). The HTML section
+#     order, the spans-table cap and the narrative anchor are increment 4's.
+#   * R47 — cited for the artifacts that exist. The determinism matrix runs
+#     over report.json and stdout, in process and in real subprocesses, across
+#     PYTHONHASHSEED / TZ / LC_ALL, two working directories and reversed path
+#     order; the no-float, no-clock and no-absolute-path clauses are asserted
+#     against those bytes. **report.html, the SVG timeline and their goldens
+#     are not covered and are increment 4's**, and the R50 canary that proves
+#     the determinism harness can fail already exists.
+# R32, R34, R35, R37, R41-R43, R46 and R51 stay ledgered.
+#
 # Increment 3 (coder): R39 leaves the ledger because
 # tests/test_model_schema.py's unknown-subcommand case now asserts one of its
 # clauses for real — a usage error is exit 3, one line, no traceback. That is a
@@ -23,22 +40,12 @@
 # --fail-on, exit 2 fail-closed, and --explain never changing the code) are the
 # increment-3 tester's, and so are R26-R31, R36's JSON half and R38/R40.
 
-R26
-R27
-R28
-R29
-R30
-R31
 R32
-R33
 R34
 R35
-R36
 R37
-R40
 R41
 R42
 R43
 R46
-R47
 R51

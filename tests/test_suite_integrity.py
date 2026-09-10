@@ -38,7 +38,10 @@ REQUIRED_CANARIES: dict[str, int] = {
     "injection_probe_identity_escape": 4,
     "attribute_allowlist_injection": 4,
     "offline_socket_permitted": 4,
-    "redaction_pattern_removed": 4,
+    # Moved 4 → 3 by the increment-3 tester in the same commit as the canary.
+    # ``report/redact.py`` (R33) landed early because R30 requires the unpriced
+    # table's recorded model id to be redacted, so the subject exists now.
+    "redaction_pattern_removed": 3,
     "detector_coverage_dropped": 2,
     # Not one of R50's seven. Added by the increment-2 review (S13): R16's
     # tool-name guard is a shape check, so a credential-shaped string that is a

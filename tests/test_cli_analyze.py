@@ -1,0 +1,1016 @@
+"""The ``analyze`` and ``detectors`` subcommands: R38, R39, R40, and AC7 end to end.
+
+Exit codes are a taxonomy rather than a habit, and the taxonomy is only useful
+if the four numbers are actually distinguishable from a script. So every code is
+driven from a condition only that code should describe, and the two that are
+easiest to conflate — argparse's own ``2`` and R11's fail-closed ``2`` — are
+pinned apart with a case each.
+
+``main(argv, stdout=…, stderr=…)`` takes both streams, so most cases run in
+process; the arms where the *process* is the subject (stdout bytes under a
+foreign ``TZ`` or ``LC_ALL``, which only take effect at interpreter start) go
+through a real subprocess.
+
+Every assertion about what is *not* written is paired with one about what is:
+"no output file was created" is satisfied perfectly by a tool that never writes
+anything, so the control arm sits next to it.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from swarm_observer import __version__
+from swarm_observer.cli.main import (
+    EXIT_FAIL_CLOSED,
+    EXIT_FINDINGS,
+    EXIT_OK,
+    EXIT_USAGE,
+    FAIL_ON_CHOICES,
+    UsageError,
+    build_config,
+    build_limits,
+    build_parser,
+    check_output_path,
+    detectors_document,
+    exit_code_for,
+    expand_inputs,
+    main,
+    run,
+    selected_slugs,
+    summary_line,
+)
+from swarm_observer.cost.compute import CostError, format_usd
+from swarm_observer.cost.snapshot import SnapshotRateSource
+from swarm_observer.detect.base import DetectorConfig, build_finding
+from swarm_observer.detect.registry import ALL_DETECTORS, DETECTOR_SLUGS
+from swarm_observer.ingest.source import IngestLimits
+from swarm_observer.model.trace import TRACE_SCHEMA_VERSION, TokenUsage
+
+from .detector_corpus import FIXTURE_DIR
+from .harness import DETERMINISM_ENVIRONMENTS, run_cli, sha256_text
+from .synthetic_traces import TraceBuilder
+
+SHIPPED = SnapshotRateSource()
+
+CLEAN = FIXTURE_DIR / "clean_single_agent.jsonl"
+DUPLICATE = FIXTURE_DIR / "duplicate_tool_call.jsonl"
+HOSTILE = FIXTURE_DIR / "hostile.jsonl"
+GAPS = FIXTURE_DIR / "gaps_unexplained.jsonl"
+
+
+def invoke(*argv: str) -> tuple[int, str, str]:
+    """Run the CLI in process and return ``(exit code, stdout, stderr)``."""
+    out, err = io.StringIO(), io.StringIO()
+    code = main(list(argv), stdout=out, stderr=err)
+    return code, out.getvalue(), err.getvalue()
+
+
+def record(**fields: Any) -> dict[str, Any]:
+    """One raw Claude Code record with the fields R4 requires."""
+    base = {
+        "agentId": "root",
+        "parentUuid": None,
+        "sessionId": "s",
+        "type": "user",
+        "uuid": "u-0",
+        "timestamp": "2026-03-02T09:00:00.000Z",
+    }
+    base.update(fields)
+    return base
+
+
+def assistant(uuid: str, when: str, usage: dict[str, Any], model: str) -> dict[str, Any]:
+    """One assistant record carrying a usage block."""
+    return record(
+        type="assistant",
+        uuid=uuid,
+        requestId=f"req-{uuid}",
+        timestamp=when,
+        message={
+            "content": [{"text": "ok", "type": "text"}],
+            "id": f"msg-{uuid}",
+            "model": model,
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "usage": usage,
+        },
+    )
+
+
+def write_jsonl(path: Path, records: list[dict[str, Any]]) -> Path:
+    """Write ``records`` as JSONL and return the path."""
+    path.write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
+    return path
+
+
+class TestSurfaceR38:
+    """R38: exactly three subcommands, and the flags the requirement names."""
+
+    def test_r38_the_parser_exposes_exactly_three_subcommands(self) -> None:
+        """R38: ``analyze``, ``schema``, ``detectors`` and no others."""
+        parser = build_parser()
+        actions = [
+            action
+            for action in parser._subparsers._group_actions  # type: ignore[union-attr]
+            if hasattr(action, "choices")
+        ]
+        assert set(actions[0].choices) == {"analyze", "schema", "detectors"}
+
+    @pytest.mark.parametrize(
+        "flag",
+        [
+            "--out",
+            "--json",
+            "--adapter",
+            "--explain",
+            "--no-previews",
+            "--detector",
+            "--blocked-gap-seconds",
+            "--fail-on",
+            "--max-file-bytes",
+            "--max-line-bytes",
+            "--max-records",
+        ],
+    )
+    def test_r38_analyze_declares_every_flag_the_requirement_names(self, flag: str) -> None:
+        """R38: ``--help`` shows the whole v1 surface even where it is deferred."""
+        parser = build_parser()
+        analyze = parser._subparsers._group_actions[0].choices["analyze"]  # type: ignore[union-attr]
+        options = {string for action in analyze._actions for string in action.option_strings}
+        assert flag in options
+
+    def test_r38_fail_on_choices_are_the_pinned_three(self) -> None:
+        """R38: ``none`` is the default because a tool that fails by default gets wrapped."""
+        assert FAIL_ON_CHOICES == ("none", "warning", "critical")
+
+    def test_r38_detectors_prints_registry_order_with_severity_and_title(self) -> None:
+        """R38: one line per detector, in registry order, deterministically."""
+        code, out, err = invoke("detectors")
+        assert code == EXIT_OK
+        assert err == ""
+        lines = out.rstrip("\n").split("\n")
+        assert len(lines) == len(ALL_DETECTORS)
+        for line, detector in zip(lines, ALL_DETECTORS, strict=True):
+            assert line.startswith(detector.slug)
+            assert detector.default_severity in line
+            assert line.endswith(detector.title)
+        assert out == detectors_document()
+
+    def test_r38_detectors_output_is_a_pure_function_of_the_registry(self) -> None:
+        """R38/R40: no padding constant to fall out of date, no clock, no locale."""
+        assert detectors_document() == detectors_document()
+        lines = detectors_document().splitlines()
+        widest = max(len(detector.slug) for detector in ALL_DETECTORS)
+        # Every severity column starts at the same offset, computed from the
+        # registry rather than from a hand-maintained constant.
+        assert {
+            line.index(detector.default_severity)
+            for line, detector in zip(lines, ALL_DETECTORS, strict=True)
+        } == {widest + 2}
+
+    def test_r38_schema_prints_the_schema_version(self) -> None:
+        """R38: the ``schema`` subcommand still names ``TRACE_SCHEMA_VERSION``."""
+        code, out, err = invoke("schema")
+        assert code == EXIT_OK and err == ""
+        assert json.loads(out)["schema_version"] == TRACE_SCHEMA_VERSION
+
+
+class TestInputExpansionR38:
+    """R38: a directory expands to its ``*.jsonl`` children, sorted, non-recursively."""
+
+    def test_r38_a_directory_yields_only_its_jsonl_children_sorted(self, tmp_path: Path) -> None:
+        """R38/AC16: three JSONL files and one ``.txt``; only the three, by basename."""
+        for name in ("c.jsonl", "a.jsonl", "b.jsonl"):
+            (tmp_path / name).write_text("{}\n", encoding="utf-8")
+        (tmp_path / "notes.txt").write_text("hi\n", encoding="utf-8")
+        nested = tmp_path / "deeper"
+        nested.mkdir()
+        (nested / "z.jsonl").write_text("{}\n", encoding="utf-8")
+        expanded = expand_inputs([str(tmp_path)])
+        assert [path.name for path in expanded] == ["a.jsonl", "b.jsonl", "c.jsonl"]
+
+    def test_r38_expansion_is_not_iterdir_order(self, tmp_path: Path) -> None:
+        """R47's premise: ``seq`` depends on file order, so file order is sorted.
+
+        The files are created in reverse so the filesystem's own order is a
+        plausible wrong answer rather than an unreachable one.
+        """
+        for name in ("z.jsonl", "m.jsonl", "a.jsonl"):
+            (tmp_path / name).write_text("{}\n", encoding="utf-8")
+        assert [path.name for path in expand_inputs([str(tmp_path)])] == [
+            "a.jsonl",
+            "m.jsonl",
+            "z.jsonl",
+        ]
+
+    def test_r38_a_named_file_is_passed_through_whatever_its_suffix(self, tmp_path: Path) -> None:
+        """R38: the ``*.jsonl`` filter is a directory rule, not a file rule."""
+        target = tmp_path / "trace.log"
+        target.write_text("{}\n", encoding="utf-8")
+        assert expand_inputs([str(target)]) == (target,)
+
+    def test_r38_a_directory_entry_that_is_not_a_regular_file_reaches_the_reader(
+        self, tmp_path: Path
+    ) -> None:
+        """R38: a subdirectory named ``*.jsonl`` is a fail-closed exit 2, not a silent skip."""
+        (tmp_path / "sub.jsonl").mkdir()
+        write_jsonl(tmp_path / "a.jsonl", [record()])
+        code, out, err = invoke("analyze", str(tmp_path), "--json", str(tmp_path / "r.json"))
+        assert code == EXIT_FAIL_CLOSED
+        assert err.count("\n") == 1
+        assert err.startswith("swarm-observer: not_a_regular_file:")
+        assert out == ""
+
+    def test_r38_directory_expansion_matches_the_explicit_file_list(self, tmp_path: Path) -> None:
+        """R38: a directory run and a two-file run produce the same report."""
+        source = tmp_path / "in"
+        source.mkdir()
+        for name in ("clean_single_agent.jsonl", "duplicate_tool_call.jsonl"):
+            (source / name).write_bytes((FIXTURE_DIR / name).read_bytes())
+        directory_report = tmp_path / "dir.json"
+        explicit_report = tmp_path / "explicit.json"
+        assert invoke("analyze", str(source), "--json", str(directory_report))[0] == EXIT_OK
+        assert (
+            invoke(
+                "analyze",
+                str(source / "duplicate_tool_call.jsonl"),
+                str(source / "clean_single_agent.jsonl"),
+                "--json",
+                str(explicit_report),
+            )[0]
+            == EXIT_OK
+        )
+        assert directory_report.read_text() == explicit_report.read_text()
+
+
+class TestDetectorSelectionR38:
+    """R38: ``--detector`` is repeatable and restricts the run."""
+
+    def test_r38_a_single_detector_restricts_the_findings(self, tmp_path: Path) -> None:
+        """R38: only the named detector's findings appear."""
+        report = tmp_path / "r.json"
+        code, _, _ = invoke(
+            "analyze", str(GAPS), "--json", str(report), "--detector", "blocked_agent"
+        )
+        assert code == EXIT_OK
+        document = json.loads(report.read_text())
+        assert {item["detector"] for item in document["findings"]} == {"blocked_agent"}
+        assert document["meta"]["options"]["detectors"] == ["blocked_agent"]
+
+    def test_r38_the_flag_is_repeatable_and_reported_in_registry_order(
+        self, tmp_path: Path
+    ) -> None:
+        """R38: two ``--detector`` flags, reported in registry order not argument order."""
+        report = tmp_path / "r.json"
+        invoke(
+            "analyze",
+            str(DUPLICATE),
+            "--json",
+            str(report),
+            "--detector",
+            "agent_loop",
+            "--detector",
+            "repeated_tool_call",
+        )
+        document = json.loads(report.read_text())
+        assert document["meta"]["options"]["detectors"] == [
+            "repeated_tool_call",
+            "agent_loop",
+        ]
+
+    def test_r38_no_detector_flag_means_every_detector(self, tmp_path: Path) -> None:
+        """R25: ``enabled=None`` is the whole registry."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(CLEAN), "--json", str(report))
+        assert json.loads(report.read_text())["meta"]["options"]["detectors"] == list(
+            DETECTOR_SLUGS
+        )
+
+    def test_r38_selected_slugs_reads_the_config_not_the_argument_list(self) -> None:
+        """R38: registry order, whatever order the flags arrived in."""
+        config = DetectorConfig(enabled=frozenset({"anomalous_span", "repeated_tool_call"}))
+        assert selected_slugs(config) == ("repeated_tool_call", "anomalous_span")
+        assert selected_slugs(DetectorConfig()) == DETECTOR_SLUGS
+
+    def test_r38_blocked_gap_seconds_moves_one_detector(self, tmp_path: Path) -> None:
+        """R25/R38: the one integer a golden report is a function of."""
+        default_report = tmp_path / "a.json"
+        raised_report = tmp_path / "b.json"
+        invoke("analyze", str(GAPS), "--json", str(default_report), "--detector", "blocked_agent")
+        invoke(
+            "analyze",
+            str(GAPS),
+            "--json",
+            str(raised_report),
+            "--detector",
+            "blocked_agent",
+            "--blocked-gap-seconds",
+            "500",
+        )
+        assert json.loads(default_report.read_text())["findings"]
+        assert json.loads(raised_report.read_text())["findings"] == []
+        raised = json.loads(raised_report.read_text())
+        assert raised["meta"]["options"]["blocked_gap_seconds"] == 500
+
+
+class TestNoPreviewsPlumbingR38:
+    """R38/A10: the flag reaches ingestion *and* the renderer."""
+
+    def test_r38_the_flag_blanks_previews_at_ingest(self, tmp_path: Path) -> None:
+        """A10: the bytes are gone from the model, not merely from the document."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(HOSTILE), "--json", str(report), "--no-previews")
+        document = json.loads(report.read_text())
+        assert all(span["text_preview"] == "" for span in document["spans"])
+        assert all(span["tool_input_preview"] == "" for span in document["spans"])
+
+    def test_r38_the_default_run_keeps_the_previews(self, tmp_path: Path) -> None:
+        """R38: the non-vacuous arm — without the flag the text is there."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(HOSTILE), "--json", str(report))
+        document = json.loads(report.read_text())
+        assert any(span["tool_input_preview"] for span in document["spans"])
+
+    def test_r38_no_hostile_payload_survives_the_flag_through_the_cli(self, tmp_path: Path) -> None:
+        """R38: the whole pipeline, not the renderer in isolation."""
+        blanked = tmp_path / "blank.json"
+        visible = tmp_path / "visible.json"
+        invoke("analyze", str(HOSTILE), "--json", str(blanked), "--no-previews")
+        invoke("analyze", str(HOSTILE), "--json", str(visible))
+        blanked_text = blanked.read_text()
+        visible_text = visible.read_text()
+        for payload in ("onerror", "alert(1)", "javascript:", "{{7*7}}", "<script", "]]>"):
+            assert payload not in blanked_text, payload
+            assert payload in visible_text, f"{payload} absent even by default: vacuous arm"
+
+    def test_r38_the_two_modes_produce_different_bytes(self, tmp_path: Path) -> None:
+        """R38: the flag is recorded and actually changes the document."""
+        blanked = tmp_path / "blank.json"
+        visible = tmp_path / "visible.json"
+        invoke("analyze", str(HOSTILE), "--json", str(blanked), "--no-previews")
+        invoke("analyze", str(HOSTILE), "--json", str(visible))
+        assert blanked.read_text() != visible.read_text()
+        assert json.loads(blanked.read_text())["meta"]["options"]["previews"] is False
+        assert json.loads(visible.read_text())["meta"]["options"]["previews"] is True
+
+
+class TestExitCodesR39:
+    """R39: four codes, four conditions, and no two conditions sharing one."""
+
+    def test_r39_a_clean_run_with_fail_on_none_is_zero(self, tmp_path: Path) -> None:
+        """R39: ``none`` never fails, even with findings present."""
+        report = tmp_path / "r.json"
+        code, _out, err = invoke(
+            "analyze", str(DUPLICATE), "--json", str(report), "--fail-on", "none"
+        )
+        assert code == EXIT_OK
+        assert err == ""
+        assert json.loads(report.read_text())["findings"]
+
+    def test_r39_the_default_threshold_is_none(self, tmp_path: Path) -> None:
+        """R39: an unflagged run of a trace with findings still exits 0."""
+        report = tmp_path / "r.json"
+        assert invoke("analyze", str(DUPLICATE), "--json", str(report))[0] == EXIT_OK
+
+    @pytest.mark.parametrize(
+        ("fail_on", "expected"),
+        [("none", EXIT_OK), ("warning", EXIT_FINDINGS), ("critical", EXIT_FINDINGS)],
+    )
+    def test_r39_a_trace_with_a_critical_finding_meets_both_thresholds(
+        self, tmp_path: Path, fail_on: str, expected: int
+    ) -> None:
+        """R39: ``1`` when a finding is at or above the threshold."""
+        report = tmp_path / "r.json"
+        code, _, _ = invoke("analyze", str(DUPLICATE), "--json", str(report), "--fail-on", fail_on)
+        assert code == expected
+
+    def test_r39_a_warning_only_run_does_not_meet_the_critical_threshold(
+        self, tmp_path: Path
+    ) -> None:
+        """R39: "at or above" is a comparison, and both sides of it are exercised."""
+        report = tmp_path / "r.json"
+        source = FIXTURE_DIR / "retry_storm_warning.jsonl"
+        assert (
+            invoke("analyze", str(source), "--json", str(report), "--fail-on", "critical")[0]
+            == EXIT_OK
+        )
+        counts = json.loads(report.read_text())["meta"]["counts"]["findings_by_severity"]
+        assert counts["critical"] == 0
+        assert counts["warning"] > 0, "vacuous: this fixture produced no warning findings"
+        # The same trace against the lower threshold does fail, so the comparison
+        # is being exercised rather than the absence of findings.
+        assert (
+            invoke("analyze", str(source), "--json", str(report), "--fail-on", "warning")[0]
+            == EXIT_FINDINGS
+        )
+
+    def test_r39_an_info_only_run_does_not_meet_the_warning_threshold(self, tmp_path: Path) -> None:
+        """R39: the lowest severity against the middle threshold."""
+        report = tmp_path / "r.json"
+        source = FIXTURE_DIR / "api_error_rate_limit.jsonl"
+        assert (
+            invoke("analyze", str(source), "--json", str(report), "--fail-on", "warning")[0]
+            == EXIT_OK
+        )
+        counts = json.loads(report.read_text())["meta"]["counts"]["findings_by_severity"]
+        assert counts == {"info": 1, "warning": 0, "critical": 0}
+
+    def test_r39_both_reports_are_still_written_on_exit_one(self, tmp_path: Path) -> None:
+        """R39: "both reports are still written" — a gate is not an abort."""
+        report = tmp_path / "r.json"
+        code, out, _ = invoke(
+            "analyze", str(DUPLICATE), "--json", str(report), "--fail-on", "critical"
+        )
+        assert code == EXIT_FINDINGS
+        assert report.is_file()
+        assert json.loads(report.read_text())["meta"]["counts"]["findings"] > 0
+        assert out.startswith("wrote ")
+
+    def test_r39_exit_code_for_is_a_function_of_the_findings_and_the_threshold(self) -> None:
+        """R39: the decision, driven directly at every severity."""
+        builder = TraceBuilder()
+        builder.model_call(usage=TokenUsage())
+        trace = builder.build()
+        findings = {
+            severity: build_finding(
+                trace=trace,
+                detector="failed_tool_call",
+                severity=severity,
+                summary=f"{severity} case",
+                span_seqs=(0,),
+                agent_ids=(),
+                metrics={"failures": 1},
+                previews=(),
+                wasted=TokenUsage(),
+            )
+            for severity in ("info", "warning", "critical")
+        }
+        assert exit_code_for([], "critical") == EXIT_OK
+        assert exit_code_for([findings["critical"]], "none") == EXIT_OK
+        assert exit_code_for([findings["info"]], "warning") == EXIT_OK
+        assert exit_code_for([findings["warning"]], "warning") == EXIT_FINDINGS
+        assert exit_code_for([findings["critical"]], "warning") == EXIT_FINDINGS
+        assert exit_code_for([findings["warning"]], "critical") == EXIT_OK
+        assert exit_code_for([findings["critical"]], "critical") == EXIT_FINDINGS
+
+    def test_r39_a_malformed_line_is_exit_two_with_one_sanitized_line(self, tmp_path: Path) -> None:
+        """R39/R11/AC2: one line matching the pinned shape, no traceback."""
+        source = tmp_path / "bad.jsonl"
+        source.write_text(
+            '{"type":"user","uuid":"u","timestamp":"2026-01-01T00:00:00Z"}\n{"type":"user"\n',
+            encoding="utf-8",
+        )
+        report = tmp_path / "r.json"
+        code, out, err = invoke("analyze", str(source), "--json", str(report))
+        assert code == EXIT_FAIL_CLOSED
+        assert out == ""
+        assert err.count("\n") == 1
+        assert err.startswith("swarm-observer: ")
+        assert "Traceback" not in err
+        assert not report.exists()
+
+    def test_r39_a_pre_existing_output_is_not_truncated_by_a_failed_run(
+        self, tmp_path: Path
+    ) -> None:
+        """R11/AC2: "no output file written or truncated", with the bytes checked."""
+        source = tmp_path / "bad.jsonl"
+        source.write_text("not json at all\n", encoding="utf-8")
+        report = tmp_path / "r.json"
+        report.write_text("PRE-EXISTING\n", encoding="utf-8")
+        code, _, err = invoke("analyze", str(source), "--json", str(report))
+        assert code == EXIT_FAIL_CLOSED
+        assert report.read_text() == "PRE-EXISTING\n"
+        assert err.strip().startswith("swarm-observer: ")
+
+    def test_r39_a_successful_run_does_replace_a_pre_existing_output(self, tmp_path: Path) -> None:
+        """R11: the control arm for the assertion above."""
+        report = tmp_path / "r.json"
+        report.write_text("PRE-EXISTING\n", encoding="utf-8")
+        assert invoke("analyze", str(CLEAN), "--json", str(report))[0] == EXIT_OK
+        assert report.read_text() != "PRE-EXISTING\n"
+
+    def test_r39_a_limit_breach_is_exit_two_naming_the_limit(self, tmp_path: Path) -> None:
+        """R11/AC16: the cap is named, the content is not."""
+        report = tmp_path / "r.json"
+        code, _, err = invoke(
+            "analyze", str(CLEAN), "--json", str(report), "--max-line-bytes", "10"
+        )
+        assert code == EXIT_FAIL_CLOSED
+        assert "line_too_long" in err
+        assert "limit 10" in err
+        assert not report.exists()
+
+    def test_r39_an_unknown_detector_is_a_usage_error(self, tmp_path: Path) -> None:
+        """R39/AC16: exit 3, and no output written."""
+        report = tmp_path / "r.json"
+        code, out, err = invoke(
+            "analyze", str(CLEAN), "--json", str(report), "--detector", "no_such_detector"
+        )
+        assert code == EXIT_USAGE
+        assert out == ""
+        assert "unknown detector: no_such_detector" in err
+        assert all(slug in err for slug in DETECTOR_SLUGS)
+        assert not report.exists()
+
+    def test_r39_a_missing_output_directory_is_a_usage_error(self, tmp_path: Path) -> None:
+        """R39/AC16: checked before anything is read."""
+        code, out, err = invoke("analyze", str(CLEAN), "--json", str(tmp_path / "nope" / "r.json"))
+        assert code == EXIT_USAGE
+        assert "output directory does not exist" in err
+        assert out == ""
+
+    def test_r39_an_output_path_that_is_a_directory_is_a_usage_error(self, tmp_path: Path) -> None:
+        """R39: writing a report over a directory is a mistake in the command."""
+        target = tmp_path / "already"
+        target.mkdir()
+        code, _, err = invoke("analyze", str(CLEAN), "--json", str(target))
+        assert code == EXIT_USAGE
+        assert "output path is a directory" in err
+
+    def test_r39_an_unknown_subcommand_is_a_usage_error_not_a_fail_closed_one(self) -> None:
+        """A-c12: argparse's own default is 2, which would collide with R11's code."""
+        code, out, err = invoke("no_such_command")
+        assert code == EXIT_USAGE
+        assert code != EXIT_FAIL_CLOSED
+        assert out == ""
+        assert "invalid choice" in err
+
+    @pytest.mark.parametrize("flag", ["--out", "--explain"])
+    def test_r39_a_deferred_flag_is_a_usage_error_naming_its_increment(
+        self, tmp_path: Path, flag: str
+    ) -> None:
+        """A-c10: accepting a flag that does nothing is how a gap becomes a wrong report."""
+        report = tmp_path / "r.json"
+        argv = ["analyze", str(CLEAN), "--json", str(report), flag]
+        if flag == "--out":
+            argv.append(str(tmp_path / "r.html"))
+        code, out, err = invoke(*argv)
+        assert code == EXIT_USAGE
+        assert f"{flag} is not available yet" in err
+        assert out == ""
+        assert not report.exists()
+
+    def test_r39_a_missing_json_flag_is_a_usage_error(self, tmp_path: Path) -> None:
+        """A-c10: a run that reports success without writing a file is worse."""
+        code, out, err = invoke("analyze", str(CLEAN))
+        assert code == EXIT_USAGE
+        assert "--json is required" in err
+        assert out == ""
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--max-records", "0"],
+            ["--max-file-bytes", "-1"],
+            ["--max-line-bytes", "0"],
+        ],
+    )
+    def test_r39_a_non_positive_size_limit_is_a_usage_error(
+        self, tmp_path: Path, argv: list[str]
+    ) -> None:
+        """R11/R39: a bad flag value is exit 3, not a fail-closed 2."""
+        code, _, err = invoke("analyze", str(CLEAN), "--json", str(tmp_path / "r.json"), *argv)
+        assert code == EXIT_USAGE
+        assert "size limit must be a positive integer" in err
+
+    def test_r39_a_negative_blocked_gap_is_a_usage_error(self, tmp_path: Path) -> None:
+        """R25/R39: the one tunable, validated at the boundary."""
+        code, _, err = invoke(
+            "analyze",
+            str(CLEAN),
+            "--json",
+            str(tmp_path / "r.json"),
+            "--blocked-gap-seconds",
+            "-1",
+        )
+        assert code == EXIT_USAGE
+        assert "non-negative integer" in err
+
+    def test_r39_no_traceback_ever_reaches_stderr(self, tmp_path: Path) -> None:
+        """R11: across every failing invocation this module knows how to produce."""
+        cases = [
+            ["analyze", str(CLEAN), "--json", str(tmp_path / "nope" / "r.json")],
+            ["analyze", str(CLEAN), "--json", str(tmp_path / "r.json"), "--detector", "x"],
+            ["analyze", str(tmp_path / "missing.jsonl"), "--json", str(tmp_path / "r.json")],
+            ["no_such_command"],
+        ]
+        for argv in cases:
+            _, _, err = invoke(*argv)
+            assert "Traceback" not in err, argv
+            assert '  File "' not in err, argv
+
+    def test_r39_run_raises_the_typed_error_instead_of_returning_a_number(
+        self, tmp_path: Path
+    ) -> None:
+        """R39: ``run()`` is the seam for asserting *which* error a condition produces."""
+        with pytest.raises(UsageError):
+            run(["analyze", str(CLEAN)], stdout=io.StringIO())
+
+
+class TestStdoutDisciplineR40:
+    """R40: one line, a deterministic function of the trace, the flags and the paths."""
+
+    def test_r40_success_writes_exactly_one_line_naming_paths_and_counts(
+        self, tmp_path: Path
+    ) -> None:
+        """R40: the pinned shape."""
+        report = tmp_path / "r.json"
+        code, out, err = invoke("analyze", str(DUPLICATE), "--json", str(report))
+        assert code == EXIT_OK
+        assert err == ""
+        assert out.count("\n") == 1
+        assert out == f"wrote {report.as_posix()}; findings: critical=1 warning=1 info=0\n"
+
+    def test_r40_the_counts_match_the_document(self, tmp_path: Path) -> None:
+        """R40: the line and the header cannot disagree."""
+        report = tmp_path / "r.json"
+        _, out, _ = invoke("analyze", str(DUPLICATE), "--json", str(report))
+        counts = json.loads(report.read_text())["meta"]["counts"]["findings_by_severity"]
+        for name in ("critical", "warning", "info"):
+            assert f"{name}={counts[name]}" in out
+
+    def test_r40_the_path_is_named_as_given_not_resolved(self, tmp_path: Path) -> None:
+        """A-c11: a resolved path carries the working directory and the username."""
+        cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            write_jsonl(Path("t.jsonl"), [record()])
+            _, out, _ = invoke("analyze", "t.jsonl", "--json", "r.json")
+            assert out.startswith("wrote r.json;")
+            assert str(tmp_path) not in out
+        finally:
+            os.chdir(cwd)
+
+    def test_r40_summary_line_is_a_function_of_its_arguments(self) -> None:
+        """R40: no clock, no colour, no duration, no progress."""
+        line = summary_line([Path("a.json")], [])
+        assert line == "wrote a.json; findings: critical=0 warning=0 info=0\n"
+        assert summary_line([Path("a.json"), Path("b.json")], []) == (
+            "wrote a.json, b.json; findings: critical=0 warning=0 info=0\n"
+        )
+
+    def test_r40_nothing_but_that_line_reaches_stdout(self, tmp_path: Path) -> None:
+        """R40: no progress bars, no spinners, no banner."""
+        report = tmp_path / "r.json"
+        _, out, _ = invoke("analyze", str(HOSTILE), "--json", str(report))
+        assert len(out.splitlines()) == 1
+
+    def test_r40_diagnostics_go_to_stderr_and_never_to_stdout(self, tmp_path: Path) -> None:
+        """R40: the two streams are separated in every failing case."""
+        for argv in (
+            ["analyze", str(CLEAN), "--json", str(tmp_path / "nope" / "r.json")],
+            ["analyze", str(tmp_path / "missing.jsonl"), "--json", str(tmp_path / "r.json")],
+        ):
+            _, out, err = invoke(*argv)
+            assert out == ""
+            assert err
+
+    def test_r40_stdout_is_identical_across_the_environment_matrix(self) -> None:
+        """R40: hash seed, timezone and locale, in real subprocesses."""
+        with_json = ["analyze", str(DUPLICATE), "--json", os.devnull]
+        digests = set()
+        for environment in (*DETERMINISM_ENVIRONMENTS, {}):
+            result = run_cli(with_json, environment=environment)
+            assert result.returncode == EXIT_OK, (environment, result.stderr)
+            digests.add(sha256_text(result.stdout))
+        assert len(digests) == 1
+
+    def test_r40_the_report_bytes_are_identical_across_the_environment_matrix(
+        self, tmp_path: Path
+    ) -> None:
+        """R36/R40: the document itself, in real subprocesses under foreign TZ and locale."""
+        digests = set()
+        for index, environment in enumerate((*DETERMINISM_ENVIRONMENTS, {})):
+            report = tmp_path / f"r{index}.json"
+            result = run_cli(
+                ["analyze", str(DUPLICATE), "--json", str(report)], environment=environment
+            )
+            assert result.returncode == EXIT_OK, (environment, result.stderr)
+            digests.add(sha256_text(report.read_text()))
+        assert len(digests) == 1
+
+    def test_r40_the_report_does_not_depend_on_the_working_directory_or_path_order(
+        self, tmp_path: Path
+    ) -> None:
+        """R38/R40: two copies of the same content, two directories, reversed order."""
+        first = tmp_path / "one"
+        second = tmp_path / "two"
+        for directory in (first, second):
+            directory.mkdir()
+            for name in ("clean_single_agent.jsonl", "duplicate_tool_call.jsonl"):
+                (directory / name).write_bytes((FIXTURE_DIR / name).read_bytes())
+        forward = tmp_path / "forward.json"
+        backward = tmp_path / "backward.json"
+        run_cli(
+            [
+                "analyze",
+                "clean_single_agent.jsonl",
+                "duplicate_tool_call.jsonl",
+                "--json",
+                str(forward),
+            ],
+            cwd=first,
+        )
+        run_cli(
+            [
+                "analyze",
+                "duplicate_tool_call.jsonl",
+                "clean_single_agent.jsonl",
+                "--json",
+                str(backward),
+            ],
+            cwd=second,
+        )
+        assert forward.read_text() == backward.read_text()
+        assert str(tmp_path) not in forward.read_text()
+
+
+class TestPipelineWiringR38:
+    """R38: ingest → detect → cost → render, with the seams asserted individually."""
+
+    def test_r38_build_limits_applies_only_the_flags_given(self) -> None:
+        """R11/R38: three caps are exposed and the rest keep their defaults."""
+        parser = build_parser()
+        args = parser.parse_args(["analyze", "x", "--json", "y", "--max-records", "5"])
+        limits = build_limits(args)
+        assert limits.max_records == 5
+        assert limits.max_files == IngestLimits().max_files
+        assert limits.max_file_bytes == IngestLimits().max_file_bytes
+
+    def test_r38_build_config_rejects_an_unknown_slug_before_reading_anything(self) -> None:
+        """R39: a usage error, raised from the config builder."""
+        parser = build_parser()
+        args = parser.parse_args(
+            ["analyze", "x", "--json", "y", "--detector", "nope", "--detector", "agent_loop"]
+        )
+        with pytest.raises(UsageError) as caught:
+            build_config(args)
+        assert "unknown detector: nope" in caught.value.message
+
+    def test_r38_check_output_path_accepts_a_bare_filename(self, tmp_path: Path) -> None:
+        """R39: ``r.json`` has an implicit parent of ``.``, which exists."""
+        cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            assert check_output_path("r.json") == Path("r.json")
+        finally:
+            os.chdir(cwd)
+
+    def test_r38_the_findings_carry_the_priced_waste_the_cost_engine_computed(
+        self, tmp_path: Path
+    ) -> None:
+        """R14/R29: one number, computed once, read by the line and the document."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(DUPLICATE), "--json", str(report))
+        document = json.loads(report.read_text())
+        priced = {item["finding_id"]: item["wasted_cost_usd"] for item in document["findings"]}
+        assert priced
+        for finding in document["findings"]:
+            if finding["wasted"]["total_tokens"] == 0:
+                assert finding["wasted_cost_usd"] == "0.000000"
+
+    def test_r38_the_report_names_the_tool_version_and_the_rate_snapshot(
+        self, tmp_path: Path
+    ) -> None:
+        """R31/R36: provenance the reader needs beside every dollar figure."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(CLEAN), "--json", str(report))
+        document = json.loads(report.read_text())
+        assert document["meta"]["tool"]["version"] == __version__
+        assert document["cost"]["snapshot"]["version"] == SHIPPED.meta.version
+        assert document["cost"]["snapshot"]["snapshot_date"] == SHIPPED.meta.snapshot_date
+
+    def test_r38_the_adapter_choice_is_the_registry(self, tmp_path: Path) -> None:
+        """R3/R38: an unknown adapter is refused by argparse's own choices."""
+        code, _, err = invoke(
+            "analyze", str(CLEAN), "--json", str(tmp_path / "r.json"), "--adapter", "otel"
+        )
+        assert code == EXIT_USAGE
+        assert "invalid choice" in err
+
+
+class TestAcceptanceCriterion7EndToEndR28R29R30R31:
+    """AC7 through the command line, with the total recomputed from the snapshot."""
+
+    def ac7_file(self, tmp_path: Path) -> Path:
+        """AC7's five model calls as a real transcript."""
+        return write_jsonl(
+            tmp_path / "ac7.jsonl",
+            [
+                record(uuid="u-0", message={"content": "go", "role": "user"}),
+                assistant(
+                    "a-1",
+                    "2026-03-02T09:00:01.000Z",
+                    {
+                        "input_tokens": 10,
+                        "output_tokens": 483,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 17971,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 17971,
+                            "ephemeral_1h_input_tokens": 0,
+                        },
+                    },
+                    "claude-sonnet-4-5-20250929",
+                ),
+                assistant(
+                    "a-2",
+                    "2026-03-02T09:00:02.000Z",
+                    {
+                        "input_tokens": 1000,
+                        "output_tokens": 7,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                    },
+                    "claude-haiku-4-5-20251001",
+                ),
+                assistant(
+                    "a-3",
+                    "2026-03-02T09:00:03.000Z",
+                    {
+                        "input_tokens": 5,
+                        "output_tokens": 1,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                    },
+                    "some-model-nobody-published",
+                ),
+                record(
+                    type="assistant",
+                    uuid="a-4",
+                    requestId="req-a-4",
+                    timestamp="2026-03-02T09:00:04.000Z",
+                    isApiErrorMessage=True,
+                    error="rate_limit_error",
+                    apiErrorStatus="429 Too Many Requests",
+                    message={
+                        "content": [{"text": "error", "type": "text"}],
+                        "id": "msg-a-4",
+                        "model": "<synthetic>",
+                        "role": "assistant",
+                    },
+                ),
+                record(
+                    type="assistant",
+                    uuid="a-5",
+                    requestId="req-a-5",
+                    timestamp="2026-03-02T09:00:05.000Z",
+                    message={
+                        "content": [{"text": "no usage", "type": "text"}],
+                        "id": "msg-a-5",
+                        "model": "claude-sonnet-4-5-20250929",
+                        "role": "assistant",
+                    },
+                ),
+            ],
+        )
+
+    def test_ac7_the_five_spans_reach_their_five_outcomes_through_the_cli(
+        self, tmp_path: Path
+    ) -> None:
+        """AC7: two priced, three unpriced with three distinct reasons."""
+        report = tmp_path / "r.json"
+        code, _, err = invoke("analyze", str(self.ac7_file(tmp_path)), "--json", str(report))
+        assert code == EXIT_OK, err
+        cost = json.loads(report.read_text())["cost"]
+        assert {row["model_key"] for row in cost["spans"]} == {
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+        }
+        assert sorted(row["reason"] for row in cost["unpriced"]) == [
+            "model_not_in_snapshot",
+            "synthetic_span",
+            "usage_missing",
+        ]
+
+    def test_ac7_the_total_equals_the_sum_of_the_two_quantized_span_costs(
+        self, tmp_path: Path
+    ) -> None:
+        """AC7: recomputed from the snapshot's rates, never from the printed total."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(self.ac7_file(tmp_path)), "--json", str(report))
+        cost = json.loads(report.read_text())["cost"]
+        rows = sum(Decimal(row["cost_usd"]) for row in cost["spans"])
+        assert cost["total"]["cost_usd"] == format_usd(rows)
+
+        expected = Decimal(0)
+        for row in cost["spans"]:
+            usage = row["usage"]
+            terms = Decimal(0)
+            for component, price_key in (
+                ("input_tokens", "input"),
+                ("output_tokens", "output"),
+                ("cache_read_input_tokens", "cache_read"),
+                ("cache_creation_5m_tokens", "cache_write_5m"),
+                ("cache_creation_1h_tokens", "cache_write_1h"),
+            ):
+                rate = SHIPPED.get_rate(row["model_key"], price_key)
+                assert rate is not None
+                terms += Decimal(usage[component]) * rate
+            expected += Decimal(format_usd(terms / Decimal(1_000_000)))
+        assert Decimal(cost["total"]["cost_usd"]) == expected
+        assert expected > 0
+
+    def test_ac7_the_four_groupings_each_sum_to_the_total(self, tmp_path: Path) -> None:
+        """AC5/R31: asserted against the emitted document, not the in-memory report."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(self.ac7_file(tmp_path)), "--json", str(report))
+        cost = json.loads(report.read_text())["cost"]
+        total = Decimal(cost["total"]["cost_usd"])
+        for group in ("by_agent", "by_model", "spans"):
+            assert sum(Decimal(row["cost_usd"]) for row in cost[group]) == total, group
+
+    def test_ac7_every_model_call_appears_priced_or_unpriced(self, tmp_path: Path) -> None:
+        """AC5/R30: nothing is silently omitted from the emitted cost section."""
+        report = tmp_path / "r.json"
+        invoke("analyze", str(self.ac7_file(tmp_path)), "--json", str(report))
+        document = json.loads(report.read_text())
+        model_calls = {span["seq"] for span in document["spans"] if span["kind"] == "model_call"}
+        priced = {row["seq"] for row in document["cost"]["spans"]}
+        unpriced = {row["seq"] for row in document["cost"]["unpriced"]}
+        assert priced | unpriced == model_calls
+        assert priced & unpriced == set()
+
+
+class TestFailClosedPricingR39:
+    """R39/R11: a pricing failure is one sanitized line and exit 2, like any other."""
+
+    def huge_usage_file(self, tmp_path: Path, tokens: int, output: int) -> Path:
+        """A transcript with an absurd but syntactically valid token count."""
+        return write_jsonl(
+            tmp_path / "huge.jsonl",
+            [
+                record(uuid="u-0", message={"content": "go", "role": "user"}),
+                assistant(
+                    "a-1",
+                    "2026-03-02T09:00:01.000Z",
+                    {
+                        "input_tokens": tokens,
+                        "output_tokens": output,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                    },
+                    "claude-sonnet-4-5-20250929",
+                ),
+            ],
+        )
+
+    def test_r39_a_token_count_beyond_the_precision_exits_two(self, tmp_path: Path) -> None:
+        """R29/R39: the guard the coder shipped, seen through the CLI."""
+        source = self.huge_usage_file(tmp_path, 10**60, 1)
+        report = tmp_path / "r.json"
+        code, out, err = invoke("analyze", str(source), "--json", str(report))
+        assert code == EXIT_FAIL_CLOSED
+        assert out == ""
+        assert err == "swarm-observer: cost_precision_exceeded: span 1\n"
+        assert not report.exists()
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "BUG-1: with a single non-zero usage component the multiply and divide stay "
+            "exact, and quantize_cost — which sits outside price_usage's guard — raises a "
+            "raw decimal.InvalidOperation. It escapes main(), so the run prints a traceback "
+            "and exits 1, colliding with R39's 'a finding met the threshold'."
+        ),
+    )
+    def test_r39_the_same_trace_with_one_component_also_exits_two(self, tmp_path: Path) -> None:
+        """R11/R39: every fail-closed condition is exit 2 and one sanitized line."""
+        source = self.huge_usage_file(tmp_path, 10**60, 0)
+        report = tmp_path / "r.json"
+        code, out, err = invoke("analyze", str(source), "--json", str(report))
+        assert code == EXIT_FAIL_CLOSED
+        assert out == ""
+        assert "Traceback" not in err
+        assert not report.exists()
+
+    def test_r39_bug1_reproduces_as_an_uncaught_exception_from_main(self, tmp_path: Path) -> None:
+        """R11/R39: BUG-1 pinned as it behaves today, beside its xfail.
+
+        ``main`` is documented as "the only place a typed error becomes a process
+        outcome", and this input walks straight past it.
+        """
+        from decimal import InvalidOperation
+
+        source = self.huge_usage_file(tmp_path, 10**60, 0)
+        with pytest.raises((InvalidOperation, CostError)) as caught:
+            invoke("analyze", str(source), "--json", str(tmp_path / "r.json"))
+        assert isinstance(caught.value, InvalidOperation), (
+            "BUG-1 appears to be fixed: delete this test and de-xfail the one above"
+        )
+
+    def test_r39_an_ordinary_large_trace_still_prices(self, tmp_path: Path) -> None:
+        """R29: the non-vacuous arm — a trillion tokens is priced, not refused."""
+        source = self.huge_usage_file(tmp_path, 10**12, 10**12)
+        report = tmp_path / "r.json"
+        code, _, err = invoke("analyze", str(source), "--json", str(report))
+        assert code == EXIT_OK, err
+        assert Decimal(json.loads(report.read_text())["cost"]["total"]["cost_usd"]) > 0

@@ -51,7 +51,7 @@ from swarm_observer.ingest.source import (
     TraceReadError,
     TraceSource,
 )
-from swarm_observer.model.trace import SourceFile, Trace
+from swarm_observer.model.trace import AGENT_ID_PATTERN, SourceFile, Trace
 
 from . import factories as f
 
@@ -672,11 +672,30 @@ class TestSourceHashingR5:
         assert compute_trace_id(tuple(reversed(files))) == expected
 
     def test_r5_digest_id_joins_parts_with_a_pipe(self) -> None:
-        """R5: the ``span_id`` construction is a pure function of its parts."""
+        """R5: the ``span_id`` construction is a pure function of its parts.
+
+        The middle assertion used to read
+        ``assert digest_id("a|b") != digest_id("a", "b") or True``, with the
+        comment "documents the joiner". ``X or True`` is true for every ``X``,
+        so it documented nothing and could not fail — this project's signature
+        defect, inside the suite that exists to catch it. Found by the
+        increment-4 tester while scanning for the same shape elsewhere; reported
+        as **BUG-11**.
+
+        The property it was reaching for is real and is now asserted in the
+        direction it actually holds: ``"|"`` is an ambiguous joiner, so two
+        different part lists can produce one digest. That is harmless for R5,
+        whose parts are a 16-hex trace id, an ``AGENT_ID_PATTERN`` agent id, a
+        decimal seq and a ``SpanKind`` — none of which can contain a ``|`` — and
+        the assertion says exactly that rather than pretending otherwise.
+        """
         import hashlib
 
         assert digest_id("a", "b") == hashlib.sha256(b"a|b").hexdigest()[:16]
-        assert digest_id("a|b") != digest_id("a", "b") or True  # documents the joiner
+        assert digest_id("a|b") == digest_id("a", "b"), (
+            "the joiner is ambiguous; R5 is safe because no part can contain a pipe"
+        )
+        assert "|" not in AGENT_ID_PATTERN.strip("^$")
         assert len(digest_id("x")) == 16
 
 

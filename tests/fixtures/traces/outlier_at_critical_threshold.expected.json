@@ -1,0 +1,62 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "anomalous_span:4fb869881a69",
+          "metrics": {
+            "dimension": "tokens",
+            "mad": 2000,
+            "median": 4000,
+            "seq": 15,
+            "value": 28000
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            15
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "outlier_at_critical_threshold.jsonl",
+  "purpose": "R24's 12*MAD critical threshold from below: median 4000, MAD 2000, outlier at exactly 28,000. R24 says 'critical when x > med + 12*mad', so equality stays a warning.",
+  "trace": {
+    "agents": 1,
+    "spans": 17,
+    "trace_id": "9e5b0d84fef2118d",
+    "warnings": {
+      "unknown_extra_key": 60
+    }
+  }
+}

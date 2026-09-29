@@ -1,0 +1,36 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "multi_agent_subagent.jsonl",
+  "purpose": "An orchestrator that waits 128 s while a subagent works 108 s of it (84%): R23's explained-gap rule keeps the trace clean. Second negative arm for all seven.",
+  "trace": {
+    "agents": 2,
+    "spans": 10,
+    "trace_id": "c71b6167d0e91bcb",
+    "warnings": {
+      "known_ignored_key:apiBlockIndex": 4,
+      "unknown_extra_key": 40
+    }
+  }
+}

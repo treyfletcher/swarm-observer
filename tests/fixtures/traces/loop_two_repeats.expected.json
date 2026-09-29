@@ -1,0 +1,87 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "repeated_tool_call:83c0a9f0b286",
+          "metrics": {
+            "first_seq": 2,
+            "last_seq": 6,
+            "occurrences": 2,
+            "tool_name": "Bash"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            2,
+            6
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 50,
+            "input_tokens": 50,
+            "output_tokens": 0
+          }
+        },
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "repeated_tool_call:fc25100f2a5f",
+          "metrics": {
+            "first_seq": 4,
+            "last_seq": 8,
+            "occurrences": 2,
+            "tool_name": "Read"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            4,
+            8
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 50,
+            "input_tokens": 50,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "loop_two_repeats.jsonl",
+  "purpose": "AC8's negative: A B A B C fires nothing from R19. The three-repeat threshold from below, with R18 still firing so the fixture is not silent for the wrong reason.",
+  "trace": {
+    "agents": 1,
+    "spans": 10,
+    "trace_id": "e0b7db7cc34768e2",
+    "warnings": {
+      "unknown_extra_key": 35
+    }
+  }
+}

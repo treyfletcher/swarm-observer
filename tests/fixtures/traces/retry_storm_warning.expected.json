@@ -1,0 +1,91 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "failed_tool_call:72cb529a8b72",
+          "metrics": {
+            "failures": 3,
+            "first_seq": 2,
+            "tool_name": "Bash"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            2,
+            4,
+            6
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "retry_storm:a975d03adbcf",
+          "metrics": {
+            "end_seq": 6,
+            "errors": 3,
+            "kinds": "tool_error",
+            "start_seq": 2,
+            "window_spans": 5
+          },
+          "previews_count": 3,
+          "severity": "warning",
+          "span_seqs": [
+            2,
+            4,
+            6
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 100,
+            "input_tokens": 100,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "retry_storm_warning.jsonl",
+  "purpose": "R20 at exactly three error spans (warning, kinds 'tool_error') in an agent with eight spans - fewer than the ten-span window, which is the short-agent case.",
+  "trace": {
+    "agents": 1,
+    "spans": 8,
+    "trace_id": "d809fac3179df5f2",
+    "warnings": {
+      "unknown_extra_key": 28
+    }
+  }
+}

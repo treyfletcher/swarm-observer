@@ -1,0 +1,62 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "blocked_agent:a9b2e7ee2c7f",
+          "metrics": {
+            "after_seq": 10,
+            "before_seq": 8,
+            "gap_seconds": 120
+          },
+          "previews_count": 0,
+          "severity": "warning",
+          "span_seqs": [
+            8,
+            10
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "gaps_explained.jsonl",
+  "purpose": "R23's explained-gap rule from both sides: three 120 s gaps covered by 90 s (75%, explained), 60 s (exactly 50%, explained) and 30 s (25%, fires). The exact-50% case is the boundary R23 states as 'at least 50%'.",
+  "trace": {
+    "agents": 4,
+    "spans": 11,
+    "trace_id": "79c16a33fbf267d7",
+    "warnings": {
+      "known_ignored_key:apiBlockIndex": 6,
+      "unknown_extra_key": 46
+    }
+  }
+}

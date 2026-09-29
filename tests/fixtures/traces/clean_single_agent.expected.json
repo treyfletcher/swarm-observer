@@ -1,0 +1,35 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "clean_single_agent.jsonl",
+  "purpose": "A short, well-behaved single-agent run. The negative arm for all seven detectors (R48b), and the reference every other fixture deviates from on purpose. It also carries two *different* tools called with byte-identical arguments, so R18's group key is pinned to (tool_name, tool_input_digest) rather than to the digest alone.",
+  "trace": {
+    "agents": 1,
+    "spans": 10,
+    "trace_id": "b56ce1ac59ea0003",
+    "warnings": {
+      "unknown_extra_key": 35
+    }
+  }
+}

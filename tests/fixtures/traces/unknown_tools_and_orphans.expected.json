@@ -1,0 +1,105 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "failed_tool_call:7a76bb96b7ea",
+          "metrics": {
+            "failures": 1,
+            "first_seq": 2,
+            "tool_name": "FrobnicateWidget"
+          },
+          "previews_count": 1,
+          "severity": "info",
+          "span_seqs": [
+            2
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [],
+          "finding_id": "unresolved_tool_call:c2f3e62f3555",
+          "metrics": {
+            "occurrences": 1,
+            "reason": "orphan_result",
+            "tool_name": "<unknown>"
+          },
+          "previews_count": 0,
+          "severity": "warning",
+          "span_seqs": [],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "unresolved_tool_call:b8f82769ba9e",
+          "metrics": {
+            "occurrences": 1,
+            "reason": "unknown_tool",
+            "tool_name": "FrobnicateWidget"
+          },
+          "previews_count": 1,
+          "severity": "critical",
+          "span_seqs": [
+            2
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    }
+  },
+  "fixture": "unknown_tools_and_orphans.jsonl",
+  "purpose": "R22's other two reasons: a tool result saying the tool does not exist (unknown_tool, critical) and a tool_result whose tool_use_id matches no call (orphan_result, warning, unattributed - see A-b7).",
+  "trace": {
+    "agents": 1,
+    "spans": 6,
+    "trace_id": "ca18bd3c13797751",
+    "warnings": {
+      "orphan_tool_result": 1,
+      "unknown_extra_key": 25
+    }
+  }
+}

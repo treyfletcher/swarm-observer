@@ -1,0 +1,36 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "outlier_population_seven.jsonl",
+  "purpose": "R24's population floor from below: seven model calls with usage, one of them a 500x token outlier and a 120 s duration outlier. Nothing fires.",
+  "trace": {
+    "agents": 1,
+    "spans": 15,
+    "trace_id": "8ab3bc617ebac8fc",
+    "warnings": {
+      "known_ignored_key:apiBlockIndex": 14,
+      "unknown_extra_key": 74
+    }
+  }
+}

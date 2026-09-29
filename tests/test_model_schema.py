@@ -15,6 +15,7 @@ a contract.
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -23,7 +24,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from swarm_observer.cli.main import EXIT_OK, main, run
+from swarm_observer.cli.main import EXIT_OK, EXIT_USAGE, main, run
 from swarm_observer.model.trace import (
     PARSE_WARNING_CODES,
     SPAN_KINDS,
@@ -434,13 +435,24 @@ class TestSchemaSubcommandR38:
             if getattr(action, "choices", None) and action.dest == "command"
         ]
         assert len(actions) == 1
-        assert set(actions[0].choices) == {"schema"}
+        # R38 pins exactly three subcommands. Increment 1 registered only
+        # ``schema``; ``analyze`` and ``detectors`` arrive with increment 3,
+        # which is the increment that builds the pipeline they drive.
+        assert set(actions[0].choices) == {"analyze", "schema", "detectors"}
 
     def test_r38_an_unknown_subcommand_is_a_usage_error(self) -> None:
-        """R38: argparse rejects a command the parser does not define."""
-        with pytest.raises(SystemExit) as raised:
-            main(["no-such-command"])
-        assert raised.value.code == 2  # argparse's own usage exit
+        """R38, R39: a command the parser does not define is exit 3, not exit 2.
+
+        Increment 1 pinned argparse's own exit 2 here because nothing yet
+        implemented R39's taxonomy. R39 reserves 2 for the *fail-closed* path —
+        a malformed or hostile trace — and gives usage mistakes 3, so sharing
+        the number would make both codes useless in a script. Increment 3's
+        parser raises instead of exiting; the message is still argparse's.
+        """
+        stderr = io.StringIO()
+        assert main(["no-such-command"], stderr=stderr) == EXIT_USAGE
+        assert "invalid choice" in stderr.getvalue()
+        assert "Traceback" not in stderr.getvalue()
 
 
 def test_r1_the_schema_lists_every_normalized_model() -> None:

@@ -1,0 +1,36 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "compaction_boundary.jsonl",
+  "purpose": "A compact_boundary system record (R12) mid-run. A system_event carrying an error is not a retry-storm error span (R20 counts model_call errors only).",
+  "trace": {
+    "agents": 1,
+    "spans": 6,
+    "trace_id": "8b871f59969c3735",
+    "warnings": {
+      "compaction_boundary": 1,
+      "unknown_extra_key": 20
+    }
+  }
+}

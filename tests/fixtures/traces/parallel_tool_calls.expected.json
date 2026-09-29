@@ -1,0 +1,61 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "blocked_agent:fc4dac2eadbf",
+          "metrics": {
+            "after_seq": 4,
+            "before_seq": 3,
+            "gap_seconds": 305
+          },
+          "previews_count": 0,
+          "severity": "critical",
+          "span_seqs": [
+            3,
+            4
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "parallel_tool_calls.jsonl",
+  "purpose": "Two tool calls from one model call, finishing 295 s apart. The 305 s gap that follows the short one is overlapped by the long one - which belongs to the same agent, so R23's 'spans belonging to other agents' rule must not count it.",
+  "trace": {
+    "agents": 1,
+    "spans": 5,
+    "trace_id": "f60b2d7ceb6dbced",
+    "warnings": {
+      "unknown_extra_key": 18
+    }
+  }
+}

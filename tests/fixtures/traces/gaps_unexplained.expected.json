@@ -1,0 +1,85 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "blocked_agent:b30b45cc089c",
+          "metrics": {
+            "after_seq": 5,
+            "before_seq": 4,
+            "gap_seconds": 60
+          },
+          "previews_count": 0,
+          "severity": "warning",
+          "span_seqs": [
+            4,
+            5
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "blocked_agent:651f9239e008",
+          "metrics": {
+            "after_seq": 7,
+            "before_seq": 6,
+            "gap_seconds": 400
+          },
+          "previews_count": 0,
+          "severity": "critical",
+          "span_seqs": [
+            6,
+            7
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "gaps_unexplained.jsonl",
+  "purpose": "R23's threshold from both sides with no other agent in the trace: 59 s (silent), 60 s (fires, warning) and 400 s (fires, critical).",
+  "trace": {
+    "agents": 1,
+    "spans": 8,
+    "trace_id": "be9045b5e4402003",
+    "warnings": {
+      "unknown_extra_key": 28
+    }
+  }
+}

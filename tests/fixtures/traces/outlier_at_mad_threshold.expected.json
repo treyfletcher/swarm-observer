@@ -1,0 +1,35 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "outlier_at_mad_threshold.jsonl",
+  "purpose": "R24's 6*MAD threshold from below: the same population with the outlier at exactly 16000. R24 says 'x > med + 6*mad', so equality is silent. The value clears the 10,000-token floor, so the MAD test is what is being measured.",
+  "trace": {
+    "agents": 1,
+    "spans": 17,
+    "trace_id": "44981bbb348fe947",
+    "warnings": {
+      "unknown_extra_key": 60
+    }
+  }
+}

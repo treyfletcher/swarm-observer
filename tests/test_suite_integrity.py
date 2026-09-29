@@ -38,11 +38,30 @@ REQUIRED_CANARIES: dict[str, int] = {
     "injection_probe_identity_escape": 4,
     "attribute_allowlist_injection": 4,
     "offline_socket_permitted": 4,
-    "redaction_pattern_removed": 4,
+    # Moved 4 → 3 by the increment-3 tester in the same commit as the canary.
+    # ``report/redact.py`` (R33) landed early because R30 requires the unpriced
+    # table's recorded model id to be redacted, so the subject exists now.
+    "redaction_pattern_removed": 3,
     "detector_coverage_dropped": 2,
+    # Not one of R50's seven. Added by the increment-2 review (S13): R16's
+    # tool-name guard is a shape check, so a credential-shaped string that is a
+    # legal tool name reaches ``metrics.tool_name`` verbatim. R51 promises no
+    # credential-shaped payload appears in a rendered report, which is only true
+    # if R33's redaction covers ``metrics`` as well as ``previews``. R50 requires
+    # certain canaries to exist and does not forbid others (increment-1 review,
+    # tension 1), and a debt written down is the only kind that gets paid.
+    "metrics_redaction_dropped": 4,
+    # Increment 3 note for the tester: ``report/redact.py`` (R33) landed early,
+    # because R30 requires the unpriced table's recorded model id to be redacted
+    # and ``report/json_out.py`` cannot honestly write trace text without it.
+    # Its subject therefore exists *now*, so ``redaction_pattern_removed`` can
+    # move from 4 to 3 as soon as somebody writes the canary. It is left at 4
+    # rather than moved by the coder, because moving it without writing the
+    # canary would fail this ledger on the next run — the debt is real either
+    # way and this is where it is recorded.
 }
 
-CURRENT_INCREMENT = 1
+CURRENT_INCREMENT = 3
 
 
 def all_test_modules() -> list[str]:
@@ -251,6 +270,119 @@ class TestCheckedInDataIsInterpreterStableR8:
             "needs a probe from a table newer than "
             f"{unicodedata.unidata_version}"
         )
+
+
+class TestMutationLedgerR49:
+    """R49: ``tests/mutations.json`` is a checked-in guard, so it gets checked.
+
+    Added by the increment-3 review. The increment-2 review's amendment 2 put
+    the mutation set in the repository so the next sweep is a **re-run** rather
+    than a re-invention. A re-run is only possible while every anchor still
+    matches the source, and nothing asserted that: three anchors went stale
+    under the review's own fix commits (`M10`, `M18`, `W-J15`) and the only
+    signal was a `NOT-APPLIED` line in a sweep somebody happened to run.
+
+    A mutant whose anchor has drifted is a mutant that reports nothing — a
+    check that cannot fail, in the artefact this project adopted *because* of
+    checks that cannot fail. This is the cheapest possible step toward
+    amendment 4 (run the sweep in CI): it does not run the mutations, it asserts
+    they could be run.
+    """
+
+    LEDGER = REPO / "tests" / "mutations.json"
+
+    def ledger(self) -> dict[str, object]:
+        return json.loads(self.LEDGER.read_text(encoding="utf-8"))
+
+    def live_mutations(self) -> list[dict[str, str]]:
+        entries = self.ledger()["mutations"]
+        assert isinstance(entries, list)
+        return [item for item in entries if not item.get("retired")]
+
+    # There is deliberately **no test here comparing an anchor to its module's
+    # source text**, and the reason is worth more than the test would have been.
+    #
+    # The first version of this class had one: every live `old` string must occur
+    # exactly once in its module. It looked like the obvious guard, it caught the
+    # three anchors that had gone stale under the review's fix commits, and it
+    # was verified to fail. It was also a **"kill everything" oracle**. A sweep
+    # runs the suite with a mutation *applied*; the applied anchor is then absent;
+    # this test failed; and the very next full run reported **289 of 289 mutants
+    # killed, including the declared control arm**. Every verdict in that run was
+    # this test failing, not the check each mutant was aimed at.
+    #
+    # The control arm is the only reason that was visible, which is precisely
+    # what the tester asked the reviewer to weigh, answered by demonstration.
+    #
+    # Tolerating the mutated form is not enough either, and that is the deeper
+    # point: **44 anchors in this ledger are shared by two or more entries** (a
+    # line with three plausible mutations gets three entries), and 18 more are
+    # nested inside another entry's anchor. Applying any one of them makes its
+    # siblings match neither form. A ledger of this shape and a source-text
+    # assertion inside the oracle are structurally incompatible.
+    #
+    # So the anchor check belongs in the **harness**, where a drifted anchor is
+    # reported as NOT-APPLIED rather than silently skipped — which is what the
+    # tester's harness already did and what surfaced the three stale anchors. The
+    # tests below read only the ledger, so they are safe under a sweep. See the
+    # increment-3 review, C7, and R53's harness clauses.
+
+    def test_r49_every_mutation_actually_changes_its_module(self) -> None:
+        """R49: an anchor whose replacement equals it is a mutant that mutates nothing."""
+        for item in self.live_mutations():
+            assert item["old"] != item["new"], item["id"]
+
+    def test_r49_every_surviving_mutant_carries_its_reason(self) -> None:
+        """R49: a survivor is either equivalent-with-evidence or open-with-a-threat.
+
+        Amendment 2's shape. A survivor with no recorded reason is a number in a
+        report rather than a ledger entry, which is the thing the increment-2
+        adjudication ruled against.
+        """
+        for item in self.ledger()["mutations"]:  # type: ignore[union-attr]
+            if item["verdict"] in {"SURVIVED", "retired"}:
+                assert item.get("why_it_survives"), item["id"]
+
+    def test_r49_the_ledger_declares_a_control_arm_that_must_survive(self) -> None:
+        """R49/R50: the sweep's own canary — a no-op mutant whose survival is required.
+
+        A sweep with no control arm cannot distinguish "the tests killed these"
+        from "the harness reports failure regardless". Asserted as a property of
+        the ledger so a future wave cannot quietly drop it.
+        """
+        # ``control-no-op`` exactly, not a substring match: ``control-flow`` is a
+        # real operator whose mutants must be *killed*, and a loose match here
+        # would demand they survive. The distinction is the whole point of the
+        # arm, so it is spelled rather than pattern-matched.
+        controls = [item for item in self.live_mutations() if item["operator"] == "control-no-op"]
+        assert controls, "the ledger declares no control arm"
+        for item in controls:
+            assert item["verdict"] == "SURVIVED", (
+                f"{item['id']} is a declared no-op and a killed verdict means the harness "
+                "is not reporting verdicts that come from the mutation"
+            )
+
+    def test_r49_the_ledger_covers_every_module_the_increment_touched(self) -> None:
+        """R49: amendment 1's per-module floor, as a check rather than a table.
+
+        Every module under ``swarm_observer/`` that this increment's branch
+        created carries mutants. Asserted against the ledger's own module set so
+        a new module arriving in increment 4 with no mutants is visible.
+        """
+        modules = {item["module"] for item in self.live_mutations()}
+        for required in (
+            "swarm_observer/cost/compute.py",
+            "swarm_observer/cost/snapshot.py",
+            "swarm_observer/cost/source.py",
+            "swarm_observer/report/json_out.py",
+            "swarm_observer/report/redact.py",
+            "swarm_observer/cli/main.py",
+            "swarm_observer/detect/base.py",
+            "swarm_observer/detect/registry.py",
+        ):
+            assert required in modules, required
+            mine = [item for item in self.live_mutations() if item["module"] == required]
+            assert len(mine) >= 8, f"{required} has only {len(mine)} mutants"
 
 
 def test_r49_collection_floor_json_has_a_stable_shape() -> None:

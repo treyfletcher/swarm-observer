@@ -1744,3 +1744,117 @@ class TestTheFailClosedFloorR11R39:
             self._invoke_with(monkeypatch, KeyboardInterrupt())
         with pytest.raises(SystemExit):
             self._invoke_with(monkeypatch, SystemExit(9))
+
+
+class TestBothDocumentsAreStagedTogetherR11:
+    """R11 + A-d11: two outputs, and neither may exist unless both do.
+
+    Added by the increment-4 review, to close two wave-5 mutation survivors.
+    A-d11 states the property this class asserts and the PR's evidence for it
+    was a run with a *malformed trace*, which fails before either document is
+    rendered — so it demonstrates that nothing is written when ingestion fails
+    and says nothing about a failure **between** the two writes, which is the
+    case A-d11 was actually written about. Two mutations proved the gap:
+
+    * ``atomic_write_texts(documents)`` → one call per document survived the
+      whole suite. That mutant is R11's "no output file is written or
+      truncated" broken on the partial-failure path, with a successful exit
+      code on the file that did get written.
+    * rendering the second document after staging the first would survive the
+      same way.
+
+    R11 is a *fail-closed* requirement: with two outputs it means either both
+    reports exist or neither does, and a requirement nothing can falsify is not
+    being kept, it is being hoped for.
+    """
+
+    def _trace(self, tmp_path: Path) -> Path:
+        return write_jsonl(tmp_path / "a.jsonl", [record()])
+
+    def test_r11_both_documents_are_handed_to_the_writer_in_one_call(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R11/A-d11: one ``atomic_write_texts`` call carrying both paths.
+
+        Red when: the CLI stages the reports one at a time, at which point a
+        failure on the second leaves the first on disk. Asserted structurally
+        because the alternative — provoking a real mid-write failure — would
+        pin the writer's internals rather than the CLI's contract with it.
+        """
+        calls: list[dict[Path, str]] = []
+        real = cli_main.atomic_write_texts
+
+        def recording(documents: dict[Path, str]) -> None:
+            calls.append(dict(documents))
+            real(documents)
+
+        monkeypatch.setattr(cli_main, "atomic_write_texts", recording)
+        html_path, json_path = tmp_path / "r.html", tmp_path / "r.json"
+        code, _, _ = invoke(
+            "analyze", str(self._trace(tmp_path)), "--out", str(html_path), "--json", str(json_path)
+        )
+        assert code == EXIT_OK
+        assert len(calls) == 1, f"the reports were staged in {len(calls)} calls, not one"
+        assert set(calls[0]) == {html_path, json_path}
+
+    def test_r11_a_render_failure_on_the_second_document_writes_neither(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R11/A-d11: both documents are rendered before either is staged.
+
+        The behavioural half. ``render_json`` runs after ``render_html``, so a
+        renderer that staged as it went would leave ``r.html`` on disk here.
+
+        Red when: the CLI writes the HTML report before the JSON one exists.
+        """
+
+        def exploding(**_kwargs: Any) -> str:
+            raise ValueError("render failed")
+
+        monkeypatch.setattr(cli_main, "render_json", exploding)
+        html_path, json_path = tmp_path / "r.html", tmp_path / "r.json"
+        code, _, err = invoke(
+            "analyze", str(self._trace(tmp_path)), "--out", str(html_path), "--json", str(json_path)
+        )
+        assert code == EXIT_FAIL_CLOSED
+        assert err.count("\n") == 1
+        assert not html_path.exists(), "the HTML report was staged before the JSON one rendered"
+        assert not json_path.exists()
+
+    def test_r11_the_writer_really_would_have_written_both(self, tmp_path: Path) -> None:
+        """R11: the non-vacuous arm — without the failure, both files appear.
+
+        "Neither file exists" is satisfied perfectly by a command that writes
+        nothing ever, which is the shape of every absence assertion in this
+        repository that has gone wrong.
+        """
+        html_path, json_path = tmp_path / "r.html", tmp_path / "r.json"
+        code, _, _ = invoke(
+            "analyze", str(self._trace(tmp_path)), "--out", str(html_path), "--json", str(json_path)
+        )
+        assert code == EXIT_OK
+        assert html_path.exists() and json_path.exists()
+
+    def test_r40_stdout_names_the_paths_in_flag_order_not_in_the_order_given(
+        self, tmp_path: Path
+    ) -> None:
+        """R40: the success line is a function of the flags, not of argv order.
+
+        ``cli.main`` builds ``written`` as ``(html_path, json_path)`` with a
+        comment saying "the paths in the order R38 lists the flags, not in dict
+        order". Reversing that tuple survived the whole suite: nothing asserted
+        the order, so R40's "a deterministic function of the trace, the flags
+        and the output paths" held only by accident of construction.
+
+        Red when: the order becomes argv order, insertion order or dict order.
+        """
+        html_path, json_path = tmp_path / "r.html", tmp_path / "r.json"
+        trace = self._trace(tmp_path)
+        _, out_a, _ = invoke(
+            "analyze", str(trace), "--out", str(html_path), "--json", str(json_path)
+        )
+        _, out_b, _ = invoke(
+            "analyze", str(trace), "--json", str(json_path), "--out", str(html_path)
+        )
+        assert out_a == out_b
+        assert out_a.startswith(f"wrote {html_path.as_posix()}, {json_path.as_posix()};")

@@ -3356,6 +3356,385 @@
    "old": "        previews=not args.no_previews,",
    "new": "        previews=args.no_previews,",
    "verdict": "killed"
+  },
+  {
+   "id": "W5-A01",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "set-operand-drop",
+   "old": "    fragments = {f\"#{value}\" for value in span_ids | finding_ids | set(SECTION_IDS)}",
+   "new": "    fragments = {f\"#{value}\" for value in span_ids | finding_ids}",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-A02",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "set-operand-drop",
+   "old": "        \"id\": frozenset(set(SECTION_IDS) | span_ids | finding_ids),",
+   "new": "        \"id\": frozenset(set(SECTION_IDS) | span_ids),",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-A03",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "arith",
+   "old": "    lane_ys = {_n(lane.lane * LANE_HEIGHT) for lane in timeline.lanes}",
+   "new": "    lane_ys = {_n(lane.lane * LANE_HEIGHT + 1) for lane in timeline.lanes}",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-A04",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "set-operand-drop",
+   "old": "        \"x\": frozenset({\"0\"} | {_n(rect.x) for rect in timeline.rects}),",
+   "new": "        \"x\": frozenset({_n(rect.x) for rect in timeline.rects}),",
+   "verdict": "SURVIVED",
+   "why_it_survives": "Equivalent, with evidence. `trace_start` is `min(starts)` over the same set the offsets are drawn from, so the earliest drawable span always has `offset_ms == 0` and therefore `x == 0`; and when `rects` is empty `report/html.py` renders no `<svg>` at all, so no `x` attribute exists. The literal `{\"0\"}` is dead width either way."
+  },
+  {
+   "id": "W5-A05",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "set-operand-drop",
+   "old": "        \"y\": frozenset(lane_ys | {_n(rect.y) for rect in timeline.rects}),",
+   "new": "        \"y\": frozenset({_n(rect.y) for rect in timeline.rects}),",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-A06",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "set-operand-drop",
+   "old": "        \"height\": frozenset({_n(LANE_HEIGHT)} | {_n(rect.height) for rect in timeline.rects}),",
+   "new": "        \"height\": frozenset({_n(rect.height) for rect in timeline.rects}),",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-A07",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "int-1",
+   "old": "        \"viewbox\": frozenset({f\"0 0 {timeline.width} {max(timeline.height, 1)}\"}),",
+   "new": "        \"viewbox\": frozenset({f\"0 0 {timeline.width} {max(timeline.height, 0)}\"}),",
+   "verdict": "SURVIVED",
+   "why_it_survives": "Equivalent, with evidence. `timeline.height == len(lanes) * LANE_HEIGHT`, so height is 0 only when the trace has no agents; with no agents no span gets a lane, `rects` is empty, and `_timeline_section` does not call `render_svg`. No document can carry a `viewBox` while height is 0."
+  },
+  {
+   "id": "W5-A08",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "literal-widen",
+   "old": "        \"data-detector\": frozenset(DETECTOR_SLUGS),",
+   "new": "        \"data-detector\": frozenset(DETECTOR_SLUGS) | {\"anything\"},",
+   "verdict": "killed",
+   "note": "Survived wave 5's first run; a real gap, closed by the review with a named test in the same commit."
+  },
+  {
+   "id": "W5-A09",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "call-argument",
+   "old": "        \"data-agent\": frozenset({_n(agent.agent_index) for agent in trace.agents}),",
+   "new": "        \"data-agent\": frozenset({_n(agent.depth or 0) for agent in trace.agents}),",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H25",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "slice-bound",
+   "old": "    span_ids = {span.seq: span.span_id for span in trace.spans[:SPANS_TABLE_CAP]}",
+   "new": "    span_ids = {span.seq: span.span_id for span in trace.spans}",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H26",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "reorder",
+   "old": "    lines.extend(_cost_section(cost=cost, options=options))\n    lines.extend(_spans_section(trace=trace, cost=cost, options=options))",
+   "new": "    lines.extend(_spans_section(trace=trace, cost=cost, options=options))\n    lines.extend(_cost_section(cost=cost, options=options))",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H27",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "relational",
+   "old": "        warning.count for warning in trace.warnings if warning.code == \"unknown_record_type\"",
+   "new": "        warning.count for warning in trace.warnings if warning.code != \"unknown_record_type\"",
+   "verdict": "killed",
+   "note": "Survived wave 5's first run; a real gap, closed by the review with a named test in the same commit."
+  },
+  {
+   "id": "W5-H28",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "call-argument-swap",
+   "old": "        f'<span class=\"chip\">critical {_n(counts[\"critical\"])}</span>',\n        f'<span class=\"chip\">warning {_n(counts[\"warning\"])}</span>',",
+   "new": "        f'<span class=\"chip\">critical {_n(counts[\"warning\"])}</span>',\n        f'<span class=\"chip\">warning {_n(counts[\"critical\"])}</span>',",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H29",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "normalization-drop",
+   "old": "    for severity in reversed(SEVERITIES):",
+   "new": "    for severity in SEVERITIES:",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H30",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "guard-drop",
+   "old": "        if finding.agent_ids:\n            agents = \", \".join(identifier(agent_id) for agent_id in finding.agent_ids)",
+   "new": "        if False:\n            agents = \", \".join(identifier(agent_id) for agent_id in finding.agent_ids)",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H31",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "relational",
+   "old": "        tail = f\" \u2026and {_n(more)} more\" if more > 0 else \"\"",
+   "new": "        tail = f\" \u2026and {_n(more)} more\" if more >= 0 else \"\"",
+   "verdict": "killed",
+   "note": "Survived wave 5's first run; a real gap, closed by the review with a named test in the same commit."
+  },
+  {
+   "id": "W5-H32",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "negation",
+   "old": "    if not timeline.rects:\n        body.append('<p class=\"empty\">No span in this trace carries both a start and an end.</p>')",
+   "new": "    if timeline.rects:\n        body.append('<p class=\"empty\">No span in this trace carries both a start and an end.</p>')",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H33",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "arith",
+   "old": "    cost_by_seq: Mapping[int, Decimal] = {row.seq: row.cost_usd for row in cost.spans}",
+   "new": "    cost_by_seq: Mapping[int, Decimal] = {row.seq + 1: row.cost_usd for row in cost.spans}",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H34",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "container-default",
+   "old": "            f'<td class=\"cell-num\">{_n(span.usage.total if span.usage else 0)}</td>'",
+   "new": "            f'<td class=\"cell-num\">{_n(span.usage.total if span.usage else 1)}</td>'",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H35",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "negation",
+   "old": "    if not trace.warnings:\n        return _section(",
+   "new": "    if trace.warnings:\n        return _section(",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H36",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "call-argument",
+   "old": "            else f\"{_ident(error.code)}: {_free(error.detail, previews=options.previews)}\"",
+   "new": "            else f\"{_ident(error.code)}: {_t(error.detail)}\"",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H37",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "call-argument",
+   "old": "            f\"<td>{_free_or_dash(span.tool_name, previews=options.previews)}</td>\"",
+   "new": "            f\"<td>{_t(span.tool_name or '\u2014')}</td>\"",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H38",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "literal",
+   "old": "STYLE_SHA256 = \"97b30480f4024d9a5bfc298962a7d9e9c51e09081e2d4ae666d9f676d82ffa11\"",
+   "new": "STYLE_SHA256 = \"97b30480f4024d9a5bfc298962a7d9e9c51e09081e2d4ae666d9f676d82ffa12\"",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-H39-CONTROL",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "control-no-op",
+   "old": "    body: list[str] = ['<div class=\"table-wrap\"><table class=\"table\">']",
+   "new": "    body: list[str] = list(['<div class=\"table-wrap\"><table class=\"table\">'])",
+   "verdict": "SURVIVED",
+   "why_it_survives": "THE DECLARED CONTROL ARM OF WAVE 5. A semantic no-op (`[x]` -> `list([x])`) on a line that executes on every render. It MUST survive: a run that reports it killed is not reporting verdicts that come from the mutation. It survived in the full run and again in the re-run after the five real gaps were closed, which is the warrant for wave 5's 36 kills."
+  },
+  {
+   "id": "W5-E12",
+   "wave": 5,
+   "module": "swarm_observer/report/escape.py",
+   "operator": "literal",
+   "old": "    \">\": \"&gt;\",",
+   "new": "    \">\": \"&gt\",",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-E13",
+   "wave": 5,
+   "module": "swarm_observer/report/escape.py",
+   "operator": "literal",
+   "old": "    '\"': \"&quot;\",",
+   "new": "    '\"': \"&#34;\",",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-E14",
+   "wave": 5,
+   "module": "swarm_observer/report/escape.py",
+   "operator": "literal",
+   "old": "    \"/\": \"&#x2F;\",",
+   "new": "    \"/\": \"/\",",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-E15",
+   "wave": 5,
+   "module": "swarm_observer/report/escape.py",
+   "operator": "literal",
+   "old": "    \"`\": \"&#x60;\",",
+   "new": "    \"`\": \"`\",",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-T23",
+   "wave": 5,
+   "module": "swarm_observer/report/timeline.py",
+   "operator": "int+1",
+   "old": "    lane_of = {agent.agent_id: index for index, agent in enumerate(trace.agents)}",
+   "new": "    lane_of = {agent.agent_id: index for index, agent in enumerate(trace.agents, 1)}",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-T24",
+   "wave": 5,
+   "module": "swarm_observer/report/timeline.py",
+   "operator": "membership",
+   "old": "    untimed = tuple(span.seq for span in trace.spans if span.seq not in drawable_seqs)",
+   "new": "    untimed = tuple(span.seq for span in trace.spans if span.seq in drawable_seqs)",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-T25",
+   "wave": 5,
+   "module": "swarm_observer/report/timeline.py",
+   "operator": "int+1",
+   "old": "        drawn_per_lane[rect.lane] = drawn_per_lane.get(rect.lane, 0) + 1",
+   "new": "        drawn_per_lane[rect.lane] = drawn_per_lane.get(rect.lane, 0) + 2",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-T26",
+   "wave": 5,
+   "module": "swarm_observer/report/timeline.py",
+   "operator": "arith",
+   "old": "        height=len(lanes) * LANE_HEIGHT,",
+   "new": "        height=(len(lanes) + 1) * LANE_HEIGHT,",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-T27",
+   "wave": 5,
+   "module": "swarm_observer/report/timeline.py",
+   "operator": "call-argument-swap",
+   "old": "            f'data-agent=\"{lane.agent_index}\"></rect>'",
+   "new": "            f'data-agent=\"{lane.lane}\"></rect>'",
+   "verdict": "SURVIVED",
+   "why_it_survives": "Equivalent, with evidence. `Trace._pinned_invariants` requires `[a.agent_index for a in agents] == range(len(agents))`, and `TimelineLane.lane` is that same enumeration index, so `lane.lane == lane.agent_index` for every lane of every valid Trace. See also W5-T29: the two are the same fact, and together they are the design observation that `TimelineLane` carries two fields the model guarantees are equal."
+  },
+  {
+   "id": "W5-T28",
+   "wave": 5,
+   "module": "swarm_observer/report/timeline.py",
+   "operator": "literal",
+   "old": "            f'<rect class=\"lane\" x=\"0\" y=\"{lane.lane * LANE_HEIGHT}\" '",
+   "new": "            f'<rect class=\"lane\" x=\"1\" y=\"{lane.lane * LANE_HEIGHT}\" '",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-T29",
+   "wave": 5,
+   "module": "swarm_observer/report/timeline.py",
+   "operator": "call-argument",
+   "old": "            agent_index=index_of.get(span.agent_id, lane),",
+   "new": "            agent_index=lane,",
+   "verdict": "SURVIVED",
+   "why_it_survives": "Equivalent, with evidence. Same invariant as W5-T27: `index_of[span.agent_id]` is the agent's `agent_index` and `lane` is its position in `trace.agents`, which R2 pins equal. The `.get(..., lane)` default is the fail-safe for a future adapter and is unreachable for any Trace the model admits."
+  },
+  {
+   "id": "W5-S12",
+   "wave": 5,
+   "module": "swarm_observer/report/sanitize.py",
+   "operator": "container-default",
+   "old": "    detectors: tuple[str, ...] = ()",
+   "new": "    detectors: tuple[str, ...] = (\"\",)",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-S13",
+   "wave": 5,
+   "module": "swarm_observer/report/sanitize.py",
+   "operator": "guard-drop",
+   "old": "    return None if value is None else free_text(value, previews=previews)",
+   "new": "    return None if value is None else redact(value)",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-C05",
+   "wave": 5,
+   "module": "swarm_observer/cli/main.py",
+   "operator": "reorder",
+   "old": "    written = [path for path in (html_path, json_path) if path is not None]",
+   "new": "    written = [path for path in (json_path, html_path) if path is not None]",
+   "verdict": "killed",
+   "note": "Survived wave 5's first run; a real gap, closed by the review with a named test in the same commit."
+  },
+  {
+   "id": "W5-C06",
+   "wave": 5,
+   "module": "swarm_observer/cli/main.py",
+   "operator": "guard-drop",
+   "old": "    atomic_write_texts(documents)",
+   "new": "    [atomic_write_texts({k: v}) for k, v in documents.items()]",
+   "verdict": "killed",
+   "note": "Survived wave 5's first run; a real gap, closed by the review with a named test in the same commit."
+  },
+  {
+   "id": "W5-X01",
+   "wave": 5,
+   "module": "swarm_observer/report/html.py",
+   "operator": "call-argument",
+   "old": "            else f\"{_ident(error.code)}: {_free(error.detail, previews=options.previews)}\"",
+   "new": "            else f\"{_t(error.code)}: {_free(error.detail, previews=options.previews)}\"",
+   "verdict": "killed"
+  },
+  {
+   "id": "W5-X02",
+   "wave": 5,
+   "module": "swarm_observer/report/json_out.py",
+   "operator": "call-argument",
+   "old": "                \"code\": identifier(span.error.code),",
+   "new": "                \"code\": span.error.code,",
+   "verdict": "killed"
   }
  ],
  "waves": {
@@ -3376,6 +3755,12 @@
    "killed": 71,
    "survived": 6,
    "note": "Increment-4 tester, over the four modules this increment created (report/escape.py, report/sanitize.py, report/timeline.py, report/html.py) plus the two it changed (report/redact.py's S14 alternation, cli/main.py's --out wiring). Designed before the sweep was run, from the requirement text rather than from the tests, and over anchors no prior wave touched. First run: 65 killed, 12 survived. Six of those twelve were real gaps and are now closed by tests named in docs/test-reports/feature-so-i4.md section 4; the re-run kills all six. Final: 71 killed, 6 survived -- the declared control arm plus five equivalents, each with its evidence in why_it_survives."
+  },
+  "5": {
+   "mutants": 41,
+   "killed": 36,
+   "survived": 5,
+   "note": "Increment-4 REVIEW. Designed over anchors NEITHER wave 4 nor waves 1-3 touched: `attribute_allowlist` (the R34 oracle itself, which wave 4 reached only through `data-seq`), `render_html`'s section wiring and span-id cap, `_header_section`'s R4 surfacing, `_timeline_section`'s no-timing tail, `_spans_section`'s cost mapping, `_warnings_section`, the four `ESCAPE_TABLE` rows wave 4 left, `build_timeline`'s lane and index maps, `render_svg`'s lane rects, and `cli/main.py`'s two-output staging -- plus two mutants on the review's OWN SpanError.code fix, because a fix is unswept code (the increment-3 review's discipline). First run: 31 killed, 10 survived. FIVE of those ten were real gaps and are now closed: W5-A08 (the allowlist could be widened to admit anything and nothing noticed -- the LEAKING_PATHS shape, in the R34 oracle), W5-C06 (A-d11's \"both documents staged in one call\" was unasserted, so R11's fail-closed guarantee on the PARTIAL-write path was a hope), W5-C05 (R40's path order in the success line), W5-H27 (R4's \"non-zero unknown_record_type surfaced in the header\" -- no trace anywhere carried that warning beside another code with a different count, a collection of one in the CORPUS), and W5-H31 (the no-timing note's \"...and N more\" tail was unconditional-safe by accident). Final: 36 killed, 5 survived -- the declared control arm plus four equivalents, all four of which are the same fact as wave 4's: `report/` re-normalizes what `model/`'s validators already guarantee. HARNESS NOTE, observed: one kill in the first run was attributed to `test_r23_blocked_agent_does_not_grow_quadratically`, a WALL-CLOCK scaling assertion, under sweep load. Re-running that mutant alone gave the real killer. A wall-clock assertion is the first test alphabetically in this suite that can fail from noise, so ANY mutant can be reported killed by it; a sweep must re-check a kill whose node id is a timing test. This is a fourth entry in the harness-hazard list, beside the mutated-baseline, the stale-bytecode and the wrong-tree hazards."
   }
  },
  "final_run": {

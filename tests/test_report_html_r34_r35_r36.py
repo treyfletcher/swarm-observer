@@ -46,7 +46,7 @@ from swarm_observer.report.html import (
     UNTIMED_LIST_CAP,
     sha256_of,
 )
-from swarm_observer.report.timeline import RECT_CLASSES
+from swarm_observer.report.timeline import LANE_HEIGHT, RECT_CLASSES
 
 from .harness import assert_matches_golden, golden_path
 from .hostile_corpus import write_hostile_trace
@@ -947,3 +947,138 @@ def test_r36_the_golden_regenerator_exists_and_is_not_a_test() -> None:
     assert script.is_file()
     source = script.read_text(encoding="utf-8")
     assert "def test" not in source
+
+
+class TestWaveFiveGapsR4R34R37:
+    """Three wave-5 mutation survivors, closed by the increment-4 review.
+
+    Each one is a property a requirement states and nothing asserted. None is a
+    defect in the shipped renderer; all three are places where a one-character
+    change produced a plausible wrong document and the whole suite stayed green,
+    which is the only evidence that matters about a check.
+    """
+
+    def test_r4_the_header_note_counts_unknown_record_types_and_not_other_warnings(
+        self,
+    ) -> None:
+        """R4: "a non-zero ``unknown_record_type`` count is surfaced in the HTML header".
+
+        Flipping the filter from ``==`` to ``!=`` survived the whole suite: no
+        trace anywhere carried an ``unknown_record_type`` warning *beside* a
+        warning of another code with a different count, so "the count of unknown
+        record types" and "the count of some other warnings" were the same
+        number in every document the suite renders. A collection of one, one
+        level up from the test — the shape the increment-3 review found in
+        ``by_model``.
+
+        The three counts here are deliberately distinct and deliberately do not
+        sum to each other, so the note can name only the right one.
+
+        Red when: the filter changes code, drops, or starts summing warnings.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="alpha", start_ms=0, end_ms=1_000)
+        builder.warning("unknown_record_type", 2, "sidechain")
+        builder.warning("known_ignored_key", 7, "rendered")
+        builder.warning("unknown_content_block", 13, "widget")
+        html = analyze_trace(builder.build()).html
+        notes = [
+            text
+            for text in parse(html).text_nodes
+            if "record(s) had a type this adapter does not know" in text
+        ]
+        assert len(notes) == 1, "R4's header surfacing is missing or duplicated"
+        assert notes[0].startswith("2 record(s)"), notes[0]
+        for wrong in ("7 record(s)", "13 record(s)", "22 record(s)", "20 record(s)"):
+            assert wrong not in notes[0]
+
+    def test_r4_the_header_note_is_absent_when_no_record_type_was_unknown(self) -> None:
+        """R4: "non-zero" — the arm that stops the note being unconditional.
+
+        Without this, the test above is satisfied by a renderer that always
+        writes the note, which would make the count the only thing asserted.
+        """
+        builder = TraceBuilder()
+        builder.model_call(agent_id="alpha", start_ms=0, end_ms=1_000)
+        builder.warning("known_ignored_key", 7, "rendered")
+        html = analyze_trace(builder.build()).html
+        assert "had a type this adapter does not know" not in html
+
+    def test_r37_the_no_timing_note_has_no_tail_when_nothing_was_truncated(self) -> None:
+        """R37/S30: "…and N more" appears only when the list really was cut.
+
+        ``more > 0`` → ``more >= 0`` survived the whole suite, which means the
+        note would have read "…and 0 more" on every trace with any untimed span
+        and nothing would have noticed. The cap itself is pinned
+        (``UNTIMED_LIST_CAP``); its *tail* was not.
+
+        Red when: the tail becomes unconditional, or stops appearing when the
+        list is genuinely truncated — both arms are asserted, because a tail
+        that never appears passes the first assertion alone.
+        """
+        below = TraceBuilder()
+        below.model_call(agent_id="alpha", start_ms=0, end_ms=1_000)
+        for _ in range(3):
+            below.model_call(agent_id="alpha")
+        html = analyze_trace(below.build()).html
+        assert "span(s) have no start or no end" in html
+        assert "…and" not in html, "an untruncated no-timing note carries a tail"
+
+        above = TraceBuilder()
+        above.model_call(agent_id="alpha", start_ms=0, end_ms=1_000)
+        for _ in range(UNTIMED_LIST_CAP + 5):
+            above.model_call(agent_id="alpha")
+        html = analyze_trace(above.build()).html
+        assert "…and 5 more" in html
+
+    def test_r34_the_generated_allowlist_holds_nothing_the_inputs_do_not_justify(
+        self, hostile: Analysis
+    ) -> None:
+        """R34: the allowlist is a specification, so it is pinned exactly, not loosely.
+
+        Every other R34 check asks whether the document's attributes are *in*
+        the allowlist. That direction cannot see a widened allowlist: adding
+        ``"anything"`` to the ``data-detector`` entry survived the whole suite,
+        and a value set that can be widened to admit whatever failed is the same
+        shape as ``LEAKING_PATHS`` before it got ``LEAK_LEDGER_SIZE``, and as a
+        self-chosen mutation set.
+
+        So this recomputes every entry from the closed enums and from the same
+        three inputs ``attribute_allowlist`` was given, in this module, and
+        asserts **equality**. A value the inputs do not justify is a failure
+        even if the renderer never writes it, because an unused permission is a
+        hole one commit before it is used.
+
+        Red when: any entry gains a value that is not a document constant, a
+        member of a closed enum, an id or fragment built from the trace, or an
+        integer drawn from the computed layout.
+        """
+        allowlist = hostile.allowlist()
+        trace, timeline = hostile.trace, hostile.timeline
+        span_ids = {span.span_id for span in trace.spans}
+        finding_ids = {finding.finding_id for finding in hostile.findings}
+        expected = {
+            "lang": {"en"},
+            "charset": {"utf-8"},
+            "http-equiv": {"Content-Security-Policy"},
+            "content": {CSP_CONTENT},
+            "type": {"button"},
+            "role": {"img"},
+            "aria-label": {"execution timeline"},
+            "class": set(CSS_CLASSES) | set(RECT_CLASSES),
+            "data-severity": set(SEVERITIES) | {ALL_SEVERITIES},
+            "data-detector": set(DETECTOR_SLUGS),
+            "id": set(SECTION_IDS) | span_ids | finding_ids,
+            "href": {f"#{value}" for value in set(SECTION_IDS) | span_ids | finding_ids},
+            "data-agent": {str(agent.agent_index) for agent in trace.agents},
+            "data-seq": {str(span.seq) for span in trace.spans},
+            "viewbox": {f"0 0 {timeline.width} {max(timeline.height, 1)}"},
+            "x": {"0"} | {str(rect.x) for rect in timeline.rects},
+            "y": {str(lane.lane * LANE_HEIGHT) for lane in timeline.lanes}
+            | {str(rect.y) for rect in timeline.rects},
+            "width": {str(timeline.width)} | {str(rect.width) for rect in timeline.rects},
+            "height": {str(LANE_HEIGHT)} | {str(rect.height) for rect in timeline.rects},
+        }
+        assert set(allowlist) == set(expected)
+        for name, values in expected.items():
+            assert set(allowlist[name]) == values, name

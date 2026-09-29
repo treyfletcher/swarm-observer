@@ -862,10 +862,19 @@ def _spans_section(
             for label, value in previews
         )
         error = span.error
+        # `error.code` goes through `_ident`, not `_t`. R12 derives it from the
+        # record's own `error` field through `ingest.text.slug` — the same
+        # construction R4 uses for a `ParseWarning.detail`, which has gone
+        # through the redactor since increment 3. Its alphabet stops markup and
+        # admits a lowercase credential, so "it is an enumerated slug" is the
+        # same reasoning that put `agent_id` and `tool_name` into a report raw
+        # in increments 1-3. Redacted in both modes, never blanked: blanking it
+        # would merge distinct API errors in the one column that says what went
+        # wrong (the review's ruling on S16, applied to the field it missed).
         error_cell = (
             "—"
             if error is None
-            else f"{_t(error.code)}: {_free(error.detail, previews=options.previews)}"
+            else f"{_ident(error.code)}: {_free(error.detail, previews=options.previews)}"
         )
         body.append(
             f'<tr id="{_t(span.span_id)}" data-seq="{_n(span.seq)}">'

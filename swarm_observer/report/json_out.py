@@ -157,7 +157,16 @@ def span_document(span: Span, *, previews: bool = True) -> dict[str, Any]:
             None
             if span.error is None
             else {
-                "code": span.error.code,
+                # `code` is trace-derived: R12 builds it from the record's own
+                # `error` field with `ingest.text.slug`, exactly as R4 builds a
+                # `ParseWarning.detail` from the record's unknown `type`. Its
+                # alphabet (`^[A-Za-z0-9_.:\-]{1,40}$`) stops *markup*; it admits
+                # a lowercase credential — `ghp_…`, `sk-…`, `sk-ant-…` all
+                # survive `slug` unchanged — so it belongs in the `identifier`
+                # class: redacted, never blanked, like the warning detail it is
+                # built the same way as. It reached both reports raw until
+                # review found it (§1.1 of docs/reviews/feature-so-i4.md).
+                "code": identifier(span.error.code),
                 "detail": free_text(span.error.detail, previews=previews),
             }
         ),

@@ -1,0 +1,62 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "anomalous_span:98c0270f1ea9",
+          "metrics": {
+            "dimension": "tokens",
+            "mad": 2000,
+            "median": 4000,
+            "seq": 15,
+            "value": 16001
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            15
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "outlier_above_mad_threshold.jsonl",
+  "purpose": "R24's 6*MAD threshold from above: median 4000, MAD 2000, threshold 16000, outlier 16001. Fires warning (16001 is below the 12*MAD critical threshold of 28000).",
+  "trace": {
+    "agents": 1,
+    "spans": 17,
+    "trace_id": "590d27887bffb267",
+    "warnings": {
+      "unknown_extra_key": 60
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "failed_tool_call:dfdcd0e33646",
+          "metrics": {
+            "failures": 1,
+            "first_seq": 2,
+            "tool_name": "Bash"
+          },
+          "previews_count": 1,
+          "severity": "info",
+          "span_seqs": [
+            2
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "api_error_rate_limit.jsonl",
+  "purpose": "An api-error / rate-limit record (R12) beside one failed tool call: exactly two error spans, adjacent, which is R20's threshold of three from below.",
+  "trace": {
+    "agents": 1,
+    "spans": 7,
+    "trace_id": "0a7023d6a018b090",
+    "warnings": {
+      "api_error_record": 1,
+      "synthetic_model": 1,
+      "unknown_extra_key": 24
+    }
+  }
+}

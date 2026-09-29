@@ -1,0 +1,88 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "anomalous_span:5cd9002b706d",
+          "metrics": {
+            "dimension": "tokens",
+            "mad": 0,
+            "median": 100,
+            "seq": 13,
+            "value": 50000
+          },
+          "previews_count": 1,
+          "severity": "critical",
+          "span_seqs": [
+            13
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "anomalous_span:7c933e6ac1be",
+          "metrics": {
+            "dimension": "duration",
+            "mad": 0,
+            "median": 1000,
+            "seq": 15,
+            "value": 120000
+          },
+          "previews_count": 1,
+          "severity": "critical",
+          "span_seqs": [
+            15
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "fires": false
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "outlier_tokens_and_duration.jsonl",
+  "purpose": "AC11's shape at exactly the population floor: eight model calls, [100]*7 + [50000] tokens (median 100, MAD 0) and a 120 s duration outlier. One finding per (span, dimension), both critical.",
+  "trace": {
+    "agents": 1,
+    "spans": 17,
+    "trace_id": "64ab30dbb31cbeda",
+    "warnings": {
+      "known_ignored_key:apiBlockIndex": 16,
+      "unknown_extra_key": 84
+    }
+  }
+}

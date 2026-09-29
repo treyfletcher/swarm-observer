@@ -1,0 +1,112 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "agent_5c140d35dcb4"
+          ],
+          "finding_id": "failed_tool_call:e2b386f92c71",
+          "metrics": {
+            "failures": 1,
+            "first_seq": 4,
+            "tool_name": "<non-conforming>"
+          },
+          "previews_count": 2,
+          "severity": "info",
+          "span_seqs": [
+            4
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "repeated_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "agent_5c140d35dcb4"
+          ],
+          "finding_id": "repeated_tool_call:1946166a4dc9",
+          "metrics": {
+            "first_seq": 2,
+            "last_seq": 4,
+            "occurrences": 2,
+            "tool_name": "<non-conforming>"
+          },
+          "previews_count": 2,
+          "severity": "warning",
+          "span_seqs": [
+            2,
+            4
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 50,
+            "input_tokens": 50,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "agent_5c140d35dcb4"
+          ],
+          "finding_id": "unresolved_tool_call:f8c05842c7ef",
+          "metrics": {
+            "occurrences": 1,
+            "reason": "unknown_tool",
+            "tool_name": "<non-conforming>"
+          },
+          "previews_count": 2,
+          "severity": "critical",
+          "span_seqs": [
+            4
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    }
+  },
+  "fixture": "hostile.jsonl",
+  "purpose": "R51's injection corpus: every free-text field carries a payload, the agent id is a script tag and the tool name does not match R16's pattern, so metrics read <non-conforming> and the recorded name is pushed into previews. Also the R51 credential shapes (AKIA, sk-ant, PEM) and an 80,000-character string.",
+  "trace": {
+    "agents": 1,
+    "spans": 6,
+    "trace_id": "f0cbd541b8d345a5",
+    "warnings": {
+      "unknown_extra_key": 21
+    }
+  }
+}

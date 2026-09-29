@@ -1,0 +1,89 @@
+{
+  "detectors": {
+    "agent_loop": {
+      "fires": false
+    },
+    "anomalous_span": {
+      "fires": false
+    },
+    "blocked_agent": {
+      "fires": false
+    },
+    "failed_tool_call": {
+      "fires": false
+    },
+    "repeated_tool_call": {
+      "findings": [
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "repeated_tool_call:41458e583a6d",
+          "metrics": {
+            "first_seq": 4,
+            "last_seq": 12,
+            "occurrences": 2,
+            "tool_name": "Read"
+          },
+          "previews_count": 1,
+          "severity": "warning",
+          "span_seqs": [
+            4,
+            12
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 50,
+            "input_tokens": 50,
+            "output_tokens": 0
+          }
+        },
+        {
+          "agent_ids": [
+            "root"
+          ],
+          "finding_id": "repeated_tool_call:043c3aaa1038",
+          "metrics": {
+            "first_seq": 2,
+            "last_seq": 14,
+            "occurrences": 4,
+            "tool_name": "Bash"
+          },
+          "previews_count": 1,
+          "severity": "critical",
+          "span_seqs": [
+            2,
+            6,
+            10,
+            14
+          ],
+          "wasted": {
+            "cache_creation_1h_tokens": 0,
+            "cache_creation_5m_tokens": 0,
+            "cache_read_input_tokens": 150,
+            "input_tokens": 150,
+            "output_tokens": 0
+          }
+        }
+      ],
+      "fires": true
+    },
+    "retry_storm": {
+      "fires": false
+    },
+    "unresolved_tool_call": {
+      "fires": false
+    }
+  },
+  "fixture": "duplicate_tool_call.jsonl",
+  "purpose": "R18 from both sides in one trace: a four-occurrence group (critical), a two-occurrence group (warning) and a one-occurrence group (no finding). The signature order A B A C A B A deliberately contains no three-fold cycle, so R19 stays silent and the two detectors can be told apart.",
+  "trace": {
+    "agents": 1,
+    "spans": 15,
+    "trace_id": "194d3c6a56804f77",
+    "warnings": {
+      "unknown_extra_key": 53
+    }
+  }
+}

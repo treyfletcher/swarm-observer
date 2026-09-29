@@ -40,9 +40,17 @@ REQUIRED_CANARIES: dict[str, int] = {
     "offline_socket_permitted": 4,
     "redaction_pattern_removed": 4,
     "detector_coverage_dropped": 2,
+    # Not one of R50's seven. Added by the increment-2 review (S13): R16's
+    # tool-name guard is a shape check, so a credential-shaped string that is a
+    # legal tool name reaches ``metrics.tool_name`` verbatim. R51 promises no
+    # credential-shaped payload appears in a rendered report, which is only true
+    # if R33's redaction covers ``metrics`` as well as ``previews``. R50 requires
+    # certain canaries to exist and does not forbid others (increment-1 review,
+    # tension 1), and a debt written down is the only kind that gets paid.
+    "metrics_redaction_dropped": 4,
 }
 
-CURRENT_INCREMENT = 1
+CURRENT_INCREMENT = 2
 
 
 def all_test_modules() -> list[str]:

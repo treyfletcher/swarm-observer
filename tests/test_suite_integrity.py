@@ -13,6 +13,7 @@ canary is a visible debt rather than an absence nobody notices.
 
 from __future__ import annotations
 
+import ast
 import json
 import tomllib
 import unicodedata
@@ -457,3 +458,147 @@ def test_r49_fixture_corpus_directory_exists() -> None:
     fixture = Path(TESTS_DIR / "fixtures" / "mapper" / "stream_fragments.jsonl")
     assert fixture.is_file()
     assert fixture.read_text(encoding="utf-8").strip(), "the fixture is empty"
+
+
+def _is_truthy_literal(node: ast.expr) -> bool:
+    """True when ``node`` is a literal that is always truthy.
+
+    ``assert True``, ``assert 1``, ``assert "x"`` and ``assert [0]`` are all
+    assertions that cannot fail. ``assert 0`` and ``assert ()`` can, so they are
+    not flagged — a deliberately failing literal is a different mistake and one
+    a run finds immediately.
+    """
+    if isinstance(node, ast.Constant):
+        return bool(node.value)
+    if isinstance(node, ast.List | ast.Tuple | ast.Set):
+        return bool(node.elts)
+    if isinstance(node, ast.Dict):
+        return bool(node.keys)
+    return False
+
+
+def tautological_assertions(source: str) -> list[tuple[int, str]]:
+    """Every ``assert`` in ``source`` that no input can make fail (R49).
+
+    Two shapes, both observed in this repository:
+
+    * ``assert <truthy literal>`` — the direct form;
+    * ``assert X or True`` — the form **BUG-11** took, where a red assertion
+      was made green by disjoining a truthy literal onto it. ``or`` is the only
+      connective that does this; ``and`` narrows rather than widens, so it is
+      not flagged.
+
+    Factored out of the test below so the check itself can be driven, which is
+    the rule this module exists to enforce: a guard whose logic only ever runs
+    inside a test is a guard nobody has watched fail.
+    """
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if _is_truthy_literal(test):
+            found.append((node.lineno, "assert <truthy literal>"))
+        elif (
+            isinstance(test, ast.BoolOp)
+            and isinstance(test.op, ast.Or)
+            and any(_is_truthy_literal(value) for value in test.values)
+        ):
+            found.append((node.lineno, "assert ... or <truthy literal>"))
+    return found
+
+
+class TestNoAssertionIsStructurallyUnableToFailR49:
+    """R49: this project's signature defect, as a check rather than as a habit.
+
+    ``tests/test_reader_and_limits.py`` carried
+    ``assert digest_id("a|b") != digest_id("a", "b") or True`` for three
+    increments. It was green every run, it documented nothing, and the property
+    it named was *false* — the ``or True`` is what a red test was made green
+    with. It is the ninth recorded instance of "a check reporting green while
+    structurally unable to fail", and it was sitting inside the suite whose
+    stated purpose is to catch that class.
+
+    The increment-4 tester found it by grepping for ``or True`` after writing
+    one, removed it, and left the question of whether the grep belongs in CI to
+    this review. **It does.** A one-off grep is exactly the mitigation that
+    produced instances two through nine: a class of defect found by hand, fixed
+    once, and left unguarded. It costs an AST walk over the test tree, it names
+    the file and line, and — unlike a grep — it cannot be confused by the string
+    ``or True`` inside a docstring, a comment or test data, which this module's
+    own prose contains.
+
+    What it does **not** catch is the subtler members of the family: a fixture
+    with no case that could trip the check, a sweep over an empty array, a
+    ledger that can be widened. Those need a non-vacuous arm per check and no
+    scanner can supply one. This closes the one shape a scanner *can* see.
+    """
+
+    def test_r49_no_test_module_contains_an_assertion_that_cannot_fail(self) -> None:
+        """R49: the scan, over every module under ``tests/``.
+
+        Red when: an assertion is disjoined with a truthy literal, or asserts
+        one outright. Both are ways of writing down a property without checking
+        it, which is worse than not writing it down — a reader believes it.
+        """
+        offenders: list[str] = []
+        for path in sorted(TESTS_DIR.rglob("*.py")):
+            for line, shape in tautological_assertions(path.read_text(encoding="utf-8")):
+                offenders.append(f"{path.relative_to(TESTS_DIR.parent).as_posix()}:{line}: {shape}")
+        assert not offenders, (
+            "assertion(s) that no input can make fail:\n  "
+            + "\n  ".join(offenders)
+            + "\nAssert the property in the direction it holds, or delete it."
+        )
+
+    def test_r49_the_scan_has_modules_and_assertions_to_scan(self) -> None:
+        """R49: the premise — "no offenders" must not mean "nothing was read".
+
+        A scanner that walked zero files, or files with zero assertions, would
+        report clean forever. This is the arm that the check above is about
+        something.
+        """
+        modules = sorted(TESTS_DIR.rglob("*.py"))
+        assert len(modules) > 30, len(modules)
+        total = sum(
+            isinstance(node, ast.Assert)
+            for path in modules
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        )
+        assert total > 1_000, total
+
+    def test_r49_the_scan_catches_bug11s_exact_shape(self) -> None:
+        """R49: driven against the line that was actually shipped.
+
+        The inherited text, verbatim, plus the direct forms. Red when: the
+        predicate is narrowed — which is what would happen the first time
+        somebody wants an assertion the scan refuses.
+        """
+        bug11 = 'assert digest_id("a|b") != digest_id("a", "b") or True  # documents the joiner\n'
+        assert tautological_assertions(bug11) == [(1, "assert ... or <truthy literal>")]
+        assert tautological_assertions("assert True\n") == [(1, "assert <truthy literal>")]
+        assert tautological_assertions("assert 1\n") == [(1, "assert <truthy literal>")]
+        assert tautological_assertions('assert x or "yes"\n') == [
+            (1, "assert ... or <truthy literal>")
+        ]
+        assert tautological_assertions("assert x or [1]\n") == [
+            (1, "assert ... or <truthy literal>")
+        ]
+
+    def test_r49_the_scan_does_not_flag_an_assertion_that_can_fail(self) -> None:
+        """R49: the other half — a scanner that flagged everything is no scanner.
+
+        ``and``-ing a truthy literal narrows nothing away, ``or 0`` cannot make
+        a false assertion true, and a message argument is not the test. Each of
+        these is a false positive that would get the scan deleted.
+        """
+        for source in (
+            "assert x == y\n",
+            "assert x and True\n",
+            "assert x or 0\n",
+            "assert x or []\n",
+            'assert x, "or True"\n',
+            "assert x or y\n",
+            "assert not x\n",
+        ):
+            assert tautological_assertions(source) == [], source

@@ -36,7 +36,7 @@
     "tests/test_report_html_r34_r35_r36.py": 63,
     "tests/test_report_redact_s14.py": 23,
     "tests/test_report_timeline_r37.py": 37,
-    "tests/test_suite_integrity.py": 23,
+    "tests/test_suite_integrity.py": 27,
     "tests/test_traceability.py": 6,
     "tests/test_untrusted_field_sweep.py": 86,
     "tests/test_warnings_and_spans.py": 58

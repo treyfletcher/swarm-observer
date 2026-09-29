@@ -30,6 +30,14 @@ Three rules this module exists to enforce:
 Escaping is not this module's business: JSON has its own quoting and R32's
 ``escape_html`` belongs to the HTML renderer alone (R44 asserts there is only
 one such definition).
+
+Increment 4 moved the redaction *policy* — which strings are free text, which
+are identifiers, and what happens to each under ``--no-previews`` — into
+``report/sanitize.py``, because the HTML renderer makes the same decisions over
+the same fields and a policy written twice is a policy that will differ. Every
+name this module used to define is re-exported, so no caller changed. What is
+still this module's own is the *document shape*: which fields exist, in which
+objects, and the R47 formatting rules above.
 """
 
 from __future__ import annotations
@@ -39,17 +47,21 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from swarm_observer.cost.compute import (
     RATE_CAVEAT,
     WASTE_CAVEAT,
     CostReport,
     format_usd,
 )
-from swarm_observer.detect.base import SEVERITIES, TRACE_DERIVED_METRIC_KEYS, Finding
+from swarm_observer.detect.base import SEVERITIES, Finding
 from swarm_observer.model.trace import AgentRun, Span, TokenUsage, Trace
-from swarm_observer.report.redact import redact
+from swarm_observer.report.sanitize import (
+    RenderOptions,
+    free_text,
+    identifier,
+    metric_value,
+    optional_text,
+)
 
 #: The one sentence both reports carry about what redaction is and is not (R33).
 REDACTION_CAVEAT = (
@@ -62,23 +74,6 @@ REDACTION_CAVEAT = (
 #: The document format's own version, independent of TRACE_SCHEMA_VERSION (R1):
 #: the trace model and the report layout can move separately.
 REPORT_FORMAT_VERSION = "1.0.0"
-
-
-class RenderOptions(BaseModel):
-    """The flags whose values change what a report contains (R38, R47).
-
-    Recorded in the document because a reader who sees empty previews should be
-    able to tell "``--no-previews`` was used" from "this trace had no text", and
-    because a golden report is a function of the trace *and the flags*.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    #: False when ``--no-previews`` blanked trace free text at ingest (A10).
-    previews: bool = True
-    blocked_gap_seconds: int = Field(default=60, ge=0)
-    #: The detector slugs this run was restricted to, in registry order.
-    detectors: tuple[str, ...] = ()
 
 
 def format_timestamp(value: datetime) -> str:
@@ -118,66 +113,6 @@ def last_timestamp(trace: Trace) -> str | None:
     return optional_timestamp(latest)
 
 
-def free_text(value: str, *, previews: bool) -> str:
-    """One trace-derived free-text string, as it may appear in a report.
-
-    Two rules meet here, and both are properties of *this function* rather than
-    of whoever called it — the Modularity notes' rule that no renderer may
-    assume its caller sanitized:
-
-    * ``--no-previews`` (R38, A10) omits trace free text **entirely**. R8's
-      three preview fields are already blanked at ingest, so for those this is a
-      no-op; it is not a no-op for ``Span.model``, ``stop_reason``,
-      ``tool_name``, ``tool_use_id``, ``SpanError.detail`` and the agent
-      strings, none of which R8 covers and every one of which R51 names as a
-      field its hostile corpus loads with payloads. Before this guard, a
-      ``--no-previews`` run of ``hostile.jsonl`` still carried
-      ``"><img src=x onerror=alert(1)>`` four times, as the recorded model id.
-      See A-c6: this reads R38's "omits trace free text entirely" as governing,
-      and it costs R30 the recorded model id in the unpriced table under that
-      flag — a tension the PM should settle.
-    * Otherwise, R33's redaction, applied here at the boundary.
-    """
-    if not previews:
-        return ""
-    return redact(value)
-
-
-def _optional(value: str | None, *, previews: bool) -> str | None:
-    """:func:`free_text` for a field whose absence is distinct from its emptiness."""
-    return None if value is None else free_text(value, previews=previews)
-
-
-def identifier(value: str) -> str:
-    """A trace-derived string this document also uses as a **key** (R33).
-
-    ``agent_id``, ``parent_agent_id`` and ``ParseWarning.detail`` are
-    trace-derived — R5 takes an agent id straight from the record's ``agentId``,
-    and R4 puts the unknown record *type* into a warning's detail — and they
-    reached the report through neither the redactor nor ``--no-previews``
-    (review, BUG-2). ``AKIAIOSFODNN7EXAMPLE`` matches R2's agent-id alphabet
-    exactly, so a credential-shaped agent id arrived verbatim in five places
-    **including under the flag**. That is the third occurrence of this project's
-    worst class: increment 1 and increment 2 (the S13 ruling on ``tool_name``)
-    each found a trace-derived field bypassing the boundary because its type
-    looked like an identifier rather than like text.
-
-    So: **redacted, in both modes, like every other trace-derived string.**
-
-    Not *blanked* under ``--no-previews``, which is the one way this differs
-    from :func:`free_text`, and for the same reason A-c7 keeps ``metrics``: an
-    agent id is the join key between ``spans[]``, ``agents[]`` and
-    ``cost.by_agent[]``, and a warning's detail is half of the ``(code, detail)``
-    pair R10 aggregates on. Blanking them collapses distinct rows into one and
-    makes the document unreadable rather than redacted. R2 constrains an agent
-    id's alphabet and R2 calls a warning detail "an enumerated slug or number
-    only", so neither is "trace free text" in R38's sense — but both are
-    trace-derived, which is what R33 keys on. The residual tension is real and
-    is the PM's: see the review's ruling on S16.
-    """
-    return redact(value)
-
-
 def usage_document(usage: TokenUsage) -> dict[str, int]:
     """R2's five token components as plain integers."""
     return {
@@ -208,11 +143,11 @@ def span_document(span: Span, *, previews: bool = True) -> dict[str, Any]:
         "kind": span.kind,
         "start": optional_timestamp(span.start),
         "end": optional_timestamp(span.end),
-        "model": _optional(span.model, previews=previews),
+        "model": optional_text(span.model, previews=previews),
         "usage": None if span.usage is None else usage_document(span.usage),
-        "stop_reason": _optional(span.stop_reason, previews=previews),
-        "tool_name": _optional(span.tool_name, previews=previews),
-        "tool_use_id": _optional(span.tool_use_id, previews=previews),
+        "stop_reason": optional_text(span.stop_reason, previews=previews),
+        "tool_name": optional_text(span.tool_name, previews=previews),
+        "tool_use_id": optional_text(span.tool_use_id, previews=previews),
         "tool_input_digest": span.tool_input_digest,
         "tool_result_status": span.tool_result_status,
         "text_preview": free_text(span.text_preview, previews=previews),
@@ -235,7 +170,7 @@ def agent_document(agent: AgentRun, *, previews: bool = True) -> dict[str, Any]:
     return {
         "agent_id": identifier(agent.agent_id),
         "agent_index": agent.agent_index,
-        "agent_type": _optional(agent.agent_type, previews=previews),
+        "agent_type": optional_text(agent.agent_type, previews=previews),
         "description": free_text(agent.description, previews=previews),
         "parent_agent_id": (
             None if agent.parent_agent_id is None else identifier(agent.parent_agent_id)
@@ -250,21 +185,12 @@ def agent_document(agent: AgentRun, *, previews: bool = True) -> dict[str, Any]:
 def metrics_document(metrics: dict[str, int | str]) -> dict[str, int | str]:
     """R16 + S13: redact the one trace-derived ``metrics`` value.
 
-    R16 constrains ``tool_name`` by *shape*, and a shape check is not a secret
-    check: ``AKIAIOSFODNN7EXAMPLE`` and ``sk-ant-api03-…`` are both legal tool
-    names under R16's pattern. R51 promises credential-shaped payloads appear
-    nowhere in a rendered report, so the redactor has to run over these values
-    and not only over ``previews``. :data:`TRACE_DERIVED_METRIC_KEYS` is the
-    machine-readable list of which keys those are, rather than a sentence in a
-    docstring that the next renderer's author has to remember.
+    The decision itself lives in
+    :func:`~swarm_observer.report.sanitize.metric_value`, because increment 4's
+    HTML renderer makes the same one over the same values and a policy applied
+    in two renderers is a policy that will be applied in one of them.
     """
-    rendered: dict[str, int | str] = {}
-    for key, value in metrics.items():
-        if key in TRACE_DERIVED_METRIC_KEYS and isinstance(value, str):
-            rendered[key] = redact(value)
-        else:
-            rendered[key] = value
-    return rendered
+    return {key: metric_value(key, value) for key, value in metrics.items()}
 
 
 def finding_document(finding: Finding, *, previews: bool = True) -> dict[str, Any]:
@@ -502,6 +428,9 @@ def render_json(
     return json.dumps(document, sort_keys=True, ensure_ascii=True, indent=2) + "\n"
 
 
+#: Re-exported from :mod:`swarm_observer.report.sanitize`, which now owns the
+#: redaction *policy* both renderers apply (increment 4). They are kept here so
+#: every existing caller and test that imports them from this module still does.
 __all__ = [
     "REDACTION_CAVEAT",
     "REPORT_FORMAT_VERSION",
@@ -513,7 +442,9 @@ __all__ = [
     "free_text",
     "identifier",
     "last_timestamp",
+    "metric_value",
     "metrics_document",
+    "optional_text",
     "optional_timestamp",
     "render_json",
     "report_document",

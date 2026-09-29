@@ -56,11 +56,13 @@ from swarm_observer.cost.compute import (
 from swarm_observer.detect.base import SEVERITIES, Finding
 from swarm_observer.model.trace import AgentRun, Span, TokenUsage, Trace
 from swarm_observer.report.sanitize import (
+    KIND_AUTHORED,
+    KIND_FREE,
+    KIND_IDENTIFIER,
     RenderOptions,
-    free_text,
-    identifier,
     metric_value,
     optional_text,
+    text,
 )
 
 #: The one sentence both reports carry about what redaction is and is not (R33).
@@ -137,22 +139,26 @@ def span_document(span: Span, *, previews: bool = True) -> dict[str, Any]:
     """
     return {
         "seq": span.seq,
-        "span_id": span.span_id,
-        "parent_span_id": span.parent_span_id,
-        "agent_id": identifier(span.agent_id),
-        "kind": span.kind,
+        "span_id": text(span.span_id, kind=KIND_AUTHORED, previews=previews),
+        "parent_span_id": optional_text(span.parent_span_id, kind=KIND_AUTHORED, previews=previews),
+        "agent_id": text(span.agent_id, kind=KIND_IDENTIFIER, previews=previews),
+        "kind": text(span.kind, kind=KIND_AUTHORED, previews=previews),
         "start": optional_timestamp(span.start),
         "end": optional_timestamp(span.end),
-        "model": optional_text(span.model, previews=previews),
+        "model": optional_text(span.model, kind=KIND_FREE, previews=previews),
         "usage": None if span.usage is None else usage_document(span.usage),
-        "stop_reason": optional_text(span.stop_reason, previews=previews),
-        "tool_name": optional_text(span.tool_name, previews=previews),
-        "tool_use_id": optional_text(span.tool_use_id, previews=previews),
-        "tool_input_digest": span.tool_input_digest,
-        "tool_result_status": span.tool_result_status,
-        "text_preview": free_text(span.text_preview, previews=previews),
-        "tool_input_preview": free_text(span.tool_input_preview, previews=previews),
-        "tool_result_preview": free_text(span.tool_result_preview, previews=previews),
+        "stop_reason": optional_text(span.stop_reason, kind=KIND_FREE, previews=previews),
+        "tool_name": optional_text(span.tool_name, kind=KIND_FREE, previews=previews),
+        "tool_use_id": optional_text(span.tool_use_id, kind=KIND_FREE, previews=previews),
+        "tool_input_digest": optional_text(
+            span.tool_input_digest, kind=KIND_AUTHORED, previews=previews
+        ),
+        "tool_result_status": optional_text(
+            span.tool_result_status, kind=KIND_AUTHORED, previews=previews
+        ),
+        "text_preview": text(span.text_preview, kind=KIND_FREE, previews=previews),
+        "tool_input_preview": text(span.tool_input_preview, kind=KIND_FREE, previews=previews),
+        "tool_result_preview": text(span.tool_result_preview, kind=KIND_FREE, previews=previews),
         "error": (
             None
             if span.error is None
@@ -166,8 +172,8 @@ def span_document(span: Span, *, previews: bool = True) -> dict[str, Any]:
                 # class: redacted, never blanked, like the warning detail it is
                 # built the same way as. It reached both reports raw until
                 # review found it (§1.1 of docs/reviews/feature-so-i4.md).
-                "code": identifier(span.error.code),
-                "detail": free_text(span.error.detail, previews=previews),
+                "code": text(span.error.code, kind=KIND_IDENTIFIER, previews=previews),
+                "detail": text(span.error.detail, kind=KIND_FREE, previews=previews),
             }
         ),
         "extras_dropped": span.extras_dropped,
@@ -177,12 +183,12 @@ def span_document(span: Span, *, previews: bool = True) -> dict[str, Any]:
 def agent_document(agent: AgentRun, *, previews: bool = True) -> dict[str, Any]:
     """One agent run (R2, R33, R38)."""
     return {
-        "agent_id": identifier(agent.agent_id),
+        "agent_id": text(agent.agent_id, kind=KIND_IDENTIFIER, previews=previews),
         "agent_index": agent.agent_index,
-        "agent_type": optional_text(agent.agent_type, previews=previews),
-        "description": free_text(agent.description, previews=previews),
+        "agent_type": optional_text(agent.agent_type, kind=KIND_FREE, previews=previews),
+        "description": text(agent.description, kind=KIND_FREE, previews=previews),
         "parent_agent_id": (
-            None if agent.parent_agent_id is None else identifier(agent.parent_agent_id)
+            optional_text(agent.parent_agent_id, kind=KIND_IDENTIFIER, previews=previews)
         ),
         "depth": agent.depth,
         "span_seqs": list(agent.span_seqs),
@@ -221,14 +227,19 @@ def finding_document(finding: Finding, *, previews: bool = True) -> dict[str, An
     legal (the increment-2 review's S13). See A-c7.
     """
     return {
-        "detector": finding.detector,
-        "finding_id": finding.finding_id,
-        "severity": finding.severity,
-        "summary": finding.summary,
+        "detector": text(finding.detector, kind=KIND_AUTHORED, previews=previews),
+        "finding_id": text(finding.finding_id, kind=KIND_AUTHORED, previews=previews),
+        "severity": text(finding.severity, kind=KIND_AUTHORED, previews=previews),
+        "summary": text(finding.summary, kind=KIND_AUTHORED, previews=previews),
         "span_seqs": list(finding.span_seqs),
-        "agent_ids": [identifier(agent_id) for agent_id in finding.agent_ids],
+        "agent_ids": [
+            text(agent_id, kind=KIND_IDENTIFIER, previews=previews)
+            for agent_id in finding.agent_ids
+        ],
         "metrics": metrics_document(finding.metrics),
-        "previews": [free_text(text, previews=previews) for text in finding.previews],
+        "previews": [
+            text(preview, kind=KIND_FREE, previews=previews) for preview in finding.previews
+        ],
         "wasted": usage_document(finding.wasted),
         "wasted_cost_usd": (
             None if finding.wasted_cost_usd is None else format_usd(finding.wasted_cost_usd)
@@ -245,18 +256,20 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
     key out of this repository's own snapshot.
     """
     return {
-        "currency": cost.meta.currency,
+        "currency": text(cost.meta.currency, kind=KIND_AUTHORED, previews=previews),
         "snapshot": {
-            "version": cost.meta.version,
-            "snapshot_date": cost.meta.snapshot_date,
-            "currency": cost.meta.currency,
+            "version": text(cost.meta.version, kind=KIND_AUTHORED, previews=previews),
+            "snapshot_date": text(cost.meta.snapshot_date, kind=KIND_AUTHORED, previews=previews),
+            "currency": text(cost.meta.currency, kind=KIND_AUTHORED, previews=previews),
             "sources": [
                 {
-                    "id": source.id,
-                    "label": source.label,
-                    "url": source.url,
-                    "as_of": source.as_of,
-                    "models": list(source.models),
+                    "id": text(source.id, kind=KIND_AUTHORED, previews=previews),
+                    "label": text(source.label, kind=KIND_AUTHORED, previews=previews),
+                    "url": text(source.url, kind=KIND_AUTHORED, previews=previews),
+                    "as_of": text(source.as_of, kind=KIND_AUTHORED, previews=previews),
+                    "models": [
+                        text(name, kind=KIND_AUTHORED, previews=previews) for name in source.models
+                    ],
                 }
                 for source in cost.meta.sources
             ],
@@ -270,7 +283,7 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         },
         "by_agent": [
             {
-                "agent_id": identifier(row.agent_id),
+                "agent_id": text(row.agent_id, kind=KIND_IDENTIFIER, previews=previews),
                 "agent_index": row.agent_index,
                 "priced_spans": row.priced_spans,
                 "unpriced_spans": row.unpriced_spans,
@@ -281,7 +294,7 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         ],
         "by_model": [
             {
-                "model_key": row.model_key,
+                "model_key": text(row.model_key, kind=KIND_AUTHORED, previews=previews),
                 "priced_spans": row.priced_spans,
                 "usage": usage_document(row.usage),
                 "cost_usd": format_usd(row.cost_usd),
@@ -290,7 +303,7 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         ],
         "by_detector": [
             {
-                "detector": row.detector,
+                "detector": text(row.detector, kind=KIND_AUTHORED, previews=previews),
                 "findings": row.findings,
                 "findings_with_unknown_cost": row.findings_unpriced,
                 "wasted": usage_document(row.wasted),
@@ -305,9 +318,9 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         "spans": [
             {
                 "seq": row.seq,
-                "agent_id": identifier(row.agent_id),
-                "model": free_text(row.model, previews=previews),
-                "model_key": row.model_key,
+                "agent_id": text(row.agent_id, kind=KIND_IDENTIFIER, previews=previews),
+                "model": text(row.model, kind=KIND_FREE, previews=previews),
+                "model_key": text(row.model_key, kind=KIND_AUTHORED, previews=previews),
                 "usage": usage_document(row.usage),
                 "cost_usd": format_usd(row.cost_usd),
             }
@@ -316,10 +329,13 @@ def cost_document(cost: CostReport, *, previews: bool = True) -> dict[str, Any]:
         "unpriced": [
             {
                 "seq": row.seq,
-                "agent_id": identifier(row.agent_id),
-                "model": free_text(row.model, previews=previews),
-                "reason": row.reason,
-                "missing_price_keys": list(row.missing_price_keys),
+                "agent_id": text(row.agent_id, kind=KIND_IDENTIFIER, previews=previews),
+                "model": text(row.model, kind=KIND_FREE, previews=previews),
+                "reason": text(row.reason, kind=KIND_AUTHORED, previews=previews),
+                "missing_price_keys": [
+                    text(key, kind=KIND_AUTHORED, previews=previews)
+                    for key in row.missing_price_keys
+                ],
             }
             for row in cost.unpriced
         ],
@@ -360,10 +376,12 @@ def report_document(
     return {
         "meta": {
             "report_format_version": REPORT_FORMAT_VERSION,
-            "schema_version": trace.schema_version,
+            "schema_version": text(
+                trace.schema_version, kind=KIND_AUTHORED, previews=options.previews
+            ),
             "tool": {"name": "swarm-observer", "version": tool_version},
-            "adapter": trace.adapter,
-            "trace_id": trace.trace_id,
+            "adapter": text(trace.adapter, kind=KIND_AUTHORED, previews=options.previews),
+            "trace_id": text(trace.trace_id, kind=KIND_AUTHORED, previews=options.previews),
             "trace_last_timestamp": last_timestamp(trace),
             "source_files": [
                 {
@@ -376,8 +394,8 @@ def report_document(
                     # field into HTML and "a filename is not trace-derived" is
                     # exactly the reading that would put it there raw. See the
                     # review's ruling on the tester's S21.
-                    "name": identifier(source.name),
-                    "sha256": source.sha256,
+                    "name": text(source.name, kind=KIND_IDENTIFIER, previews=options.previews),
+                    "sha256": text(source.sha256, kind=KIND_AUTHORED, previews=options.previews),
                     "bytes": source.bytes,
                     "records": source.records,
                 }
@@ -393,7 +411,10 @@ def report_document(
             "options": {
                 "previews": options.previews,
                 "blocked_gap_seconds": options.blocked_gap_seconds,
-                "detectors": list(options.detectors),
+                "detectors": [
+                    text(slug, kind=KIND_AUTHORED, previews=options.previews)
+                    for slug in options.detectors
+                ],
             },
             "notes": {"redaction": REDACTION_CAVEAT},
         },
@@ -403,9 +424,9 @@ def report_document(
         "cost": cost_document(cost, previews=options.previews),
         "warnings": [
             {
-                "code": warning.code,
+                "code": text(warning.code, kind=KIND_AUTHORED, previews=options.previews),
                 "count": warning.count,
-                "detail": identifier(warning.detail),
+                "detail": text(warning.detail, kind=KIND_IDENTIFIER, previews=options.previews),
             }
             for warning in trace.warnings
         ],
@@ -448,8 +469,6 @@ __all__ = [
     "cost_document",
     "finding_document",
     "format_timestamp",
-    "free_text",
-    "identifier",
     "last_timestamp",
     "metric_value",
     "metrics_document",
@@ -459,5 +478,6 @@ __all__ = [
     "report_document",
     "severity_counts",
     "span_document",
+    "text",
     "usage_document",
 ]

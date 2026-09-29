@@ -87,11 +87,14 @@ from swarm_observer.report.json_out import (
     severity_counts,
 )
 from swarm_observer.report.sanitize import (
+    KIND_AUTHORED,
+    KIND_FREE,
+    KIND_IDENTIFIER,
     RenderOptions,
-    free_text,
-    identifier,
+    TextKind,
     metric_value,
     optional_text,
+    text,
 )
 from swarm_observer.report.timeline import (
     LANE_HEIGHT,
@@ -116,6 +119,14 @@ CSP_CONTENT = (
     "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
     "img-src data:; base-uri 'none'; form-action 'none'"
 )
+
+#: Sentences this package authored, hoisted out of their f-strings so a line
+#: stays inside the formatter's width now that every rendered string names its
+#: class. They still go through the writer at their call sites (A-d1).
+NO_TIMESTAMP_NOTE = "none recorded"
+NO_WALL_CLOCK_NOTE = "No wall-clock time from this run appears in this document."
+RECT_WIDTH_NOTE = "Rect width is a proportion of that span, rounded to whole units."
+SPANS_CAP_NOTE = "The JSON report carries every span; this table is capped for the browser."
 
 #: The ``data-severity`` value the "show everything" filter control carries. Not
 #: a :data:`~swarm_observer.detect.base.SEVERITIES` member — it is spelled
@@ -379,53 +390,60 @@ SCRIPT_SHA256 = "17e03dec80b6d0255ef1f1b3db2ec39ce4903a9e742833c0e0a76c03f348dff
 STYLE_SHA256 = "97b30480f4024d9a5bfc298962a7d9e9c51e09081e2d4ae666d9f676d82ffa11"
 
 
-def _t(value: str) -> str:
-    """A string this package authored, escaped anyway (R32).
+class _Writer:
+    """The one boundary every string this module writes passes through (C1).
 
-    Section headings, column labels, enumerated slugs and the caveat sentences
-    all come through here. None of them can carry a payload today; escaping them
-    means none of them can carry one tomorrow either, and it removes "is this
-    string trusted?" as a question a future editor of this module has to answer
-    correctly on every line.
+    The increment-4 review's chief comment: escaping was made universal in
+    increment 4 and has never leaked, while redaction stayed a three-way choice
+    between ``_t``, ``_free`` and ``_ident`` that a human made per call site —
+    and *that* half leaked in all four increments. This class is that comment
+    implemented. There is one callable, its ``kind`` is keyword-only with no
+    default, and :data:`~swarm_observer.report.sanitize.TextKind` is exhaustive,
+    so a string cannot reach this document without its class being named. The
+    classes themselves, and what each one does, live in
+    :mod:`swarm_observer.report.sanitize`; this class only adds R32's escaping
+    on top, which is the half that was already universal.
+
+    It is constructed once per render, from the :class:`RenderOptions` the run
+    was given, so no call site can pass the wrong ``previews`` value — that was
+    a per-call-site argument until increment 5 too.
     """
-    return escape_html(value)
+
+    __slots__ = ("previews",)
+
+    def __init__(self, options: RenderOptions) -> None:
+        self.previews = options.previews
+
+    def __call__(self, value: str, *, kind: TextKind) -> str:
+        """Redact or blank by ``kind`` (R33, R38, R43), then escape (R32).
+
+        Redaction runs **before** escaping and the order is load-bearing:
+        escaping first would turn ``TOKEN="secret"`` into
+        ``TOKEN&#x3D;&quot;secret&quot;`` and R33's patterns would no longer
+        match it.
+        """
+        return escape_html(text(value, kind=kind, previews=self.previews))
+
+    def optional(self, value: str | None, *, kind: TextKind, absent: str = "\u2014") -> str:
+        """:meth:`__call__` for a field whose absence is distinct from its emptiness."""
+        rendered = optional_text(value, kind=kind, previews=self.previews)
+        return absent if rendered is None else escape_html(rendered)
+
+    def money(self, value: Decimal) -> str:
+        """R29's six-decimal string. Authored: a ``Decimal``'s own formatting."""
+        return self(format_usd(value), kind=KIND_AUTHORED)
 
 
 def _n(value: int) -> str:
-    """An integer this package computed. No float ever reaches the document (R47)."""
-    return str(value)
+    """An integer this package computed (R47).
 
-
-def _money(value: Decimal) -> str:
-    """R29's six-decimal string, escaped like everything else."""
-    return escape_html(format_usd(value))
-
-
-def _free(value: str, *, previews: bool) -> str:
-    """Trace free text: redact (R33), blank under ``--no-previews``, escape (R32)."""
-    return escape_html(free_text(value, previews=previews))
-
-
-def _free_or_dash(value: str | None, *, previews: bool) -> str:
-    """:func:`_free` for an optional field, with an em dash for ``None``."""
-    rendered = optional_text(value, previews=previews)
-    return "—" if rendered is None else escape_html(rendered)
-
-
-def _ident(value: str) -> str:
-    """A trace-derived join key: redact in both modes (R33), then escape (R32)."""
-    return escape_html(identifier(value))
-
-
-def _anchor(value: str) -> str:
-    """A same-document fragment ``href`` (R34, R35).
-
-    ``value`` is a ``span_id`` (16 lowercase hex, R5) or a ``finding_id``
-    (``slug:12 hex``, R15), each pattern-validated on its model. Escaped
-    regardless: the alphabet is the reason this is safe and the escape is the
-    reason it stays safe if the alphabet ever moves.
+    The one string in this module that does not go through :class:`_Writer`,
+    and the exemption is a proof rather than a judgment: ``str`` of an ``int``
+    is ``-?[0-9]+``, an alphabet that contains no character in
+    :data:`~swarm_observer.report.escape.ESCAPE_TABLE`, no non-printable, and
+    nothing any R33 pattern can match. No float ever reaches the document.
     """
-    return escape_html(value)
+    return str(value)
 
 
 def attribute_allowlist(
@@ -478,11 +496,11 @@ def attribute_allowlist(
     }
 
 
-def _section(section_id: str, title: str, body: Iterable[str]) -> list[str]:
+def _section(w: _Writer, section_id: str, title: str, body: Iterable[str]) -> list[str]:
     """One R36 section: a heading, its collapse control, and its content."""
     lines = [
-        f'<section class="section" id="{_t(section_id)}">',
-        f'<div class="section-title"><h2>{_t(title)}</h2>'
+        f'<section class="section" id="{w(section_id, kind=KIND_AUTHORED)}">',
+        f'<div class="section-title"><h2>{w(title, kind=KIND_AUTHORED)}</h2>'
         f'<button class="toggle" type="button">hide</button></div>',
     ]
     lines.extend(body)
@@ -492,6 +510,7 @@ def _section(section_id: str, title: str, body: Iterable[str]) -> list[str]:
 
 def _header_section(
     *,
+    w: _Writer,
     trace: Trace,
     findings: Sequence[Finding],
     cost: CostReport,
@@ -513,15 +532,18 @@ def _header_section(
     )
     body: list[str] = [
         '<dl class="meta-grid">',
-        f"<dt>trace id</dt><dd>{_t(trace.trace_id)}</dd>",
-        f"<dt>adapter</dt><dd>{_t(trace.adapter)}</dd>",
-        f"<dt>trace schema</dt><dd>{_t(trace.schema_version)}</dd>",
-        f"<dt>report format</dt><dd>{_t(REPORT_FORMAT_VERSION)}</dd>",
-        f"<dt>swarm-observer</dt><dd>{_t(tool_version)}</dd>",
-        f"<dt>rate snapshot</dt><dd>{_t(cost.meta.version)} ({_t(cost.meta.snapshot_date)})</dd>",
-        f"<dt>previews</dt><dd>{_t('included' if options.previews else 'omitted')}</dd>",
+        f"<dt>trace id</dt><dd>{w(trace.trace_id, kind=KIND_AUTHORED)}</dd>",
+        f"<dt>adapter</dt><dd>{w(trace.adapter, kind=KIND_AUTHORED)}</dd>",
+        f"<dt>trace schema</dt><dd>{w(trace.schema_version, kind=KIND_AUTHORED)}</dd>",
+        f"<dt>report format</dt><dd>{w(REPORT_FORMAT_VERSION, kind=KIND_AUTHORED)}</dd>",
+        f"<dt>swarm-observer</dt><dd>{w(tool_version, kind=KIND_AUTHORED)}</dd>",
+        f"<dt>rate snapshot</dt><dd>{w(cost.meta.version, kind=KIND_AUTHORED)} "
+        f"({w(cost.meta.snapshot_date, kind=KIND_AUTHORED)})</dd>",
+        f"<dt>previews</dt><dd>"
+        f"{w('included' if options.previews else 'omitted', kind=KIND_AUTHORED)}</dd>",
         f"<dt>blocked-gap seconds</dt><dd>{_n(options.blocked_gap_seconds)}</dd>",
-        f"<dt>detectors</dt><dd>{_t(', '.join(options.detectors) or 'none')}</dd>",
+        f"<dt>detectors</dt><dd>"
+        f"{w(', '.join(options.detectors) or 'none', kind=KIND_AUTHORED)}</dd>",
         "</dl>",
         '<div class="counts">',
         f'<span class="chip">{_n(len(trace.agents))} agents</span>',
@@ -545,21 +567,24 @@ def _header_section(
     body.append("<tr><th>name</th><th>sha256</th><th>bytes</th><th>records</th></tr>")
     for source in trace.source_files:
         body.append(
-            f"<tr><td>{_ident(source.name)}</td><td>{_t(source.sha256)}</td>"
+            f"<tr><td>{w(source.name, kind=KIND_IDENTIFIER)}</td>"
+            f"<td>{w(source.sha256, kind=KIND_AUTHORED)}</td>"
             f'<td class="cell-num">{_n(source.bytes)}</td>'
             f'<td class="cell-num">{_n(source.records)}</td></tr>'
         )
     body.append("</table></div>")
-    body.append(f'<p class="caveat">{_t(REDACTION_CAVEAT)}</p>')
-    body.append(f'<p class="caveat">{_t(RATE_CAVEAT)}</p>')
+    body.append(f'<p class="caveat">{w(REDACTION_CAVEAT, kind=KIND_AUTHORED)}</p>')
+    body.append(f'<p class="caveat">{w(RATE_CAVEAT, kind=KIND_AUTHORED)}</p>')
     last = last_timestamp(trace)
+    last_text = w(NO_TIMESTAMP_NOTE if last is None else last, kind=KIND_AUTHORED)
     body.append(
-        f'<p class="provenance">swarm-observer {_t(tool_version)}; rates '
-        f"{_t(cost.meta.version)} of {_t(cost.meta.snapshot_date)}; trace's last timestamp "
-        f"{_t(last) if last is not None else _t('none recorded')}. "
-        f"{_t('No wall-clock time from this run appears in this document.')}</p>"
+        f'<p class="provenance">swarm-observer {w(tool_version, kind=KIND_AUTHORED)}; rates '
+        f"{w(cost.meta.version, kind=KIND_AUTHORED)} of "
+        f"{w(cost.meta.snapshot_date, kind=KIND_AUTHORED)}; trace's last timestamp "
+        f"{last_text}. "
+        f"{w(NO_WALL_CLOCK_NOTE, kind=KIND_AUTHORED)}</p>"
     )
-    return _section("header", "Run", body)
+    return _section(w, "header", "Run", body)
 
 
 def _grouped(findings: Sequence[Finding]) -> list[Finding]:
@@ -583,47 +608,70 @@ def _grouped(findings: Sequence[Finding]) -> list[Finding]:
 
 def _findings_section(
     *,
+    w: _Writer,
     findings: Sequence[Finding],
     span_ids: Mapping[int, str],
     options: RenderOptions,
 ) -> list[str]:
     """R36: the findings, each with summary, severity, metrics, evidence, previews, waste."""
     body: list[str] = [
-        f'<p class="caveat">{_t(WASTE_CAVEAT)}</p>',
+        f'<p class="caveat">{w(WASTE_CAVEAT, kind=KIND_AUTHORED)}</p>',
         '<div class="filters">',
-        f'<button class="filter" type="button" data-severity="{_t(ALL_SEVERITIES)}">all</button>',
+        f'<button class="filter" type="button" '
+        f'data-severity="{w(ALL_SEVERITIES, kind=KIND_AUTHORED)}">all</button>',
     ]
     for severity in reversed(SEVERITIES):
         body.append(
-            f'<button class="filter" type="button" data-severity="{_t(severity)}">'
-            f"{_t(severity)}</button>"
+            f'<button class="filter" type="button" '
+            f'data-severity="{w(severity, kind=KIND_AUTHORED)}">'
+            f"{w(severity, kind=KIND_AUTHORED)}</button>"
         )
     body.append("</div>")
     if not findings:
         body.append('<p class="empty">No detector produced a finding for this trace.</p>')
-        return _section("findings", "Findings", body)
+        return _section(w, "findings", "Findings", body)
 
     for finding in _grouped(findings):
         body.append(
-            f'<article class="finding" id="{_t(finding.finding_id)}" '
-            f'data-severity="{_t(finding.severity)}" data-detector="{_t(finding.detector)}">'
+            f'<article class="finding" id="{w(finding.finding_id, kind=KIND_AUTHORED)}" '
+            f'data-severity="{w(finding.severity, kind=KIND_AUTHORED)}" '
+            f'data-detector="{w(finding.detector, kind=KIND_AUTHORED)}">'
         )
         body.append(
-            f'<div class="finding-head"><span class="sev">{_t(finding.severity)}</span>'
-            f"<strong>{_t(finding.detector)}</strong>"
-            f"<span>{_t(finding.summary)}</span></div>"
+            f'<div class="finding-head">'
+            f'<span class="sev">{w(finding.severity, kind=KIND_AUTHORED)}</span>'
+            f"<strong>{w(finding.detector, kind=KIND_AUTHORED)}</strong>"
+            f"<span>{w(finding.summary, kind=KIND_AUTHORED)}</span></div>"
         )
         body.append('<div class="finding-body">')
-        body.append(f"<p><code>{_t(finding.finding_id)}</code></p>")
+        body.append(f"<p><code>{w(finding.finding_id, kind=KIND_AUTHORED)}</code></p>")
         if finding.metrics:
+            # The one place in this module where the class is applied a call up
+            # rather than at the writer, and it is deliberate. `metric_value`
+            # (R16, S13) chooses `identifier` for `tool_name` and `authored`
+            # for everything else, by key, from
+            # `detect.base.TRACE_DERIVED_METRIC_KEYS` — so by the time `w` sees
+            # this string its trace-derived half has already been redacted and
+            # only R32's escaping is left, which is what `KIND_AUTHORED` means
+            # here. Re-classifying at the writer instead would be *free*, since
+            # R33's redaction is idempotent — and that is exactly the reason
+            # not to: the second redaction would produce identical bytes with
+            # or without the first, and
+            # `tests/canaries/test_canary_metrics_redaction_dropped.py`, whose
+            # only job is to show this call is load-bearing, would go green
+            # with the call deleted. A guard hidden behind an idempotent second
+            # guard is a guard nothing can prove.
             pairs = " · ".join(
                 f"{key}={metric_value(key, value)}"
                 for key, value in sorted(finding.metrics.items())
             )
-            body.append(f'<p class="metrics">{_t(pairs)}</p>')
+            body.append(f'<p class="metrics">{w(pairs, kind=KIND_AUTHORED)}</p>')
         if finding.agent_ids:
-            agents = ", ".join(identifier(agent_id) for agent_id in finding.agent_ids)
-            body.append(f'<p class="metrics">agents: {_t(agents)}</p>')
+            # Escaped per element rather than over the join: `escape_html` is a
+            # per-code-point map (R32), so the bytes are identical either way,
+            # and this way every string in the line has its own named class.
+            agents = ", ".join(w(agent_id, kind=KIND_IDENTIFIER) for agent_id in finding.agent_ids)
+            body.append(f'<p class="metrics">agents: {agents}</p>')
         if finding.span_seqs:
             # The link target is the span row's `id`, which is `Span.span_id`
             # (R5, 16 hex) — never the `seq`, which is not an id in this
@@ -631,26 +679,29 @@ def _findings_section(
             # `SPANS_TABLE_CAP` has no row, so it is named without a link rather
             # than linked to an anchor that does not exist.
             links = " ".join(
-                f'<a href="#{_anchor(span_ids[seq])}">{_n(seq)}</a>' if seq in span_ids else _n(seq)
+                f'<a href="#{w(span_ids[seq], kind=KIND_AUTHORED)}">{_n(seq)}</a>'
+                if seq in span_ids
+                else _n(seq)
                 for seq in finding.span_seqs
             )
             body.append(f'<p class="metrics">spans: {links}</p>')
         for preview in finding.previews:
-            body.append(f'<p class="preview">{_free(preview, previews=options.previews)}</p>')
+            body.append(f'<p class="preview">{w(preview, kind=KIND_FREE)}</p>')
         waste = finding.wasted
         cost_text = (
             "unknown" if finding.wasted_cost_usd is None else format_usd(finding.wasted_cost_usd)
         )
         body.append(
             f'<p class="metrics">attributed waste: {_n(waste.total)} tokens, '
-            f"{_t(cost_text)} USD</p>"
+            f"{w(cost_text, kind=KIND_AUTHORED)} USD</p>"
         )
         body.append("</div></article>")
-    return _section("findings", "Findings", body)
+    return _section(w, "findings", "Findings", body)
 
 
 def _timeline_section(
     *,
+    w: _Writer,
     timeline: Timeline,
     agents_by_id: Mapping[str, AgentRun],
     options: RenderOptions,
@@ -677,10 +728,12 @@ def _timeline_section(
     )
     for lane in timeline.lanes:
         agent = agents_by_id.get(lane.agent_id)
-        kind = "—" if agent is None else _free_or_dash(agent.agent_type, previews=options.previews)
-        described = "" if agent is None else _free(agent.description, previews=options.previews)
+        agent_kind = "—" if agent is None else w.optional(agent.agent_type, kind=KIND_FREE)
+        described = "" if agent is None else w(agent.description, kind=KIND_FREE)
         parent = (
-            "—" if agent is None or agent.parent_agent_id is None else _ident(agent.parent_agent_id)
+            "—"
+            if agent is None or agent.parent_agent_id is None
+            else w(agent.parent_agent_id, kind=KIND_IDENTIFIER)
         )
         depth = "—" if agent is None or agent.depth is None else _n(agent.depth)
         owned = _n(0 if agent is None else len(agent.span_seqs))
@@ -688,8 +741,8 @@ def _timeline_section(
             f'<tr data-agent="{_n(lane.agent_index)}">'
             f'<td class="cell-num">{_n(lane.lane)}</td>'
             f'<td class="cell-num">{_n(lane.agent_index)}</td>'
-            f'<td class="lane-name">{_ident(lane.agent_id)}</td>'
-            f"<td>{kind}</td>"
+            f'<td class="lane-name">{w(lane.agent_id, kind=KIND_IDENTIFIER)}</td>'
+            f"<td>{agent_kind}</td>"
             f"<td>{described}</td>"
             f"<td>{parent}</td>"
             f'<td class="cell-num">{depth}</td>'
@@ -703,7 +756,7 @@ def _timeline_section(
         body.append(
             f'<p class="note">One lane per agent, in agent-index order; '
             f"the figure spans {_n(timeline.span_ms)} ms of trace time. "
-            f"{_t('Rect width is a proportion of that span, rounded to whole units.')}</p>"
+            f"{w(RECT_WIDTH_NOTE, kind=KIND_AUTHORED)}</p>"
         )
         body.append(render_svg(timeline))
     if timeline.untimed_seqs:
@@ -713,16 +766,16 @@ def _timeline_section(
         tail = f" …and {_n(more)} more" if more > 0 else ""
         body.append(
             f'<p class="note">{_n(len(timeline.untimed_seqs))} span(s) have no start or no '
-            f"end and are not drawn: {_t(shown)}{tail}</p>"
+            f"end and are not drawn: {w(shown, kind=KIND_AUTHORED)}{tail}</p>"
         )
     if not options.previews:
         body.append(
             '<p class="note">Previews are omitted; lane labels are redacted identifiers.</p>'
         )
-    return _section("timeline", "Timeline", body)
+    return _section(w, "timeline", "Timeline", body)
 
 
-def _cost_section(*, cost: CostReport, options: RenderOptions) -> list[str]:
+def _cost_section(*, w: _Writer, cost: CostReport, options: RenderOptions) -> list[str]:
     """R31's four groupings and R30's unpriced table (R36).
 
     The unpriced count sits beside the grand total, which is the increment-3
@@ -732,8 +785,8 @@ def _cost_section(*, cost: CostReport, options: RenderOptions) -> list[str]:
     """
     body: list[str] = [
         '<dl class="meta-grid">',
-        f"<dt>total</dt><dd>{_money(cost.total_cost_usd)} USD "
-        f"({_t(format_display_usd(cost.total_cost_usd))} USD)</dd>",
+        f"<dt>total</dt><dd>{w.money(cost.total_cost_usd)} USD "
+        f"({w(format_display_usd(cost.total_cost_usd), kind=KIND_AUTHORED)} USD)</dd>",
         f"<dt>priced spans</dt><dd>{_n(cost.priced_spans)}</dd>",
         f"<dt>unpriced spans</dt><dd>{_n(cost.unpriced_spans)}</dd>",
         f"<dt>tokens</dt><dd>{_n(cost.total_usage.total)}</dd>",
@@ -753,12 +806,12 @@ def _cost_section(*, cost: CostReport, options: RenderOptions) -> list[str]:
     )
     for agent_row in cost.by_agent:
         body.append(
-            f"<tr><td>{_ident(agent_row.agent_id)}</td>"
+            f"<tr><td>{w(agent_row.agent_id, kind=KIND_IDENTIFIER)}</td>"
             f'<td class="cell-num">{_n(agent_row.agent_index)}</td>'
             f'<td class="cell-num">{_n(agent_row.priced_spans)}</td>'
             f'<td class="cell-num">{_n(agent_row.unpriced_spans)}</td>'
             f'<td class="cell-num">{_n(agent_row.usage.total)}</td>'
-            f'<td class="cell-num">{_money(agent_row.cost_usd)}</td></tr>'
+            f'<td class="cell-num">{w.money(agent_row.cost_usd)}</td></tr>'
         )
     body.append("</table></div>")
 
@@ -766,10 +819,10 @@ def _cost_section(*, cost: CostReport, options: RenderOptions) -> list[str]:
     body.append("<tr><th>model key</th><th>priced</th><th>tokens</th><th>cost USD</th></tr>")
     for model_row in cost.by_model:
         body.append(
-            f"<tr><td>{_t(model_row.model_key)}</td>"
+            f"<tr><td>{w(model_row.model_key, kind=KIND_AUTHORED)}</td>"
             f'<td class="cell-num">{_n(model_row.priced_spans)}</td>'
             f'<td class="cell-num">{_n(model_row.usage.total)}</td>'
-            f'<td class="cell-num">{_money(model_row.cost_usd)}</td></tr>'
+            f'<td class="cell-num">{w.money(model_row.cost_usd)}</td></tr>'
         )
     body.append("</table></div>")
 
@@ -780,12 +833,12 @@ def _cost_section(*, cost: CostReport, options: RenderOptions) -> list[str]:
     )
     for detector_row in cost.by_detector:
         body.append(
-            f"<tr><td>{_t(detector_row.detector)}</td>"
+            f"<tr><td>{w(detector_row.detector, kind=KIND_AUTHORED)}</td>"
             f'<td class="cell-num">{_n(detector_row.findings)}</td>'
             f'<td class="cell-num">{_n(detector_row.findings_unpriced)}</td>'
             f'<td class="cell-num">{_n(detector_row.wasted.total)}</td>'
             f'<td class="cell-num">{_n(detector_row.wasted_unpriced.total)}</td>'
-            f'<td class="cell-num">{_money(detector_row.wasted_cost_usd)}</td></tr>'
+            f'<td class="cell-num">{w.money(detector_row.wasted_cost_usd)}</td></tr>'
         )
     body.append("</table></div>")
 
@@ -801,18 +854,19 @@ def _cost_section(*, cost: CostReport, options: RenderOptions) -> list[str]:
         for unpriced in cost.unpriced:
             body.append(
                 f'<tr><td class="cell-num">{_n(unpriced.seq)}</td>'
-                f"<td>{_ident(unpriced.agent_id)}</td>"
-                f"<td>{_free(unpriced.model, previews=options.previews)}</td>"
-                f"<td>{_t(unpriced.reason)}</td>"
-                f"<td>{_t(', '.join(unpriced.missing_price_keys))}</td></tr>"
+                f"<td>{w(unpriced.agent_id, kind=KIND_IDENTIFIER)}</td>"
+                f"<td>{w(unpriced.model, kind=KIND_FREE)}</td>"
+                f"<td>{w(unpriced.reason, kind=KIND_AUTHORED)}</td>"
+                f"<td>{w(', '.join(unpriced.missing_price_keys), kind=KIND_AUTHORED)}</td></tr>"
             )
         body.append("</table></div>")
-    body.append(f'<p class="caveat">{_t(RATE_CAVEAT)}</p>')
-    return _section("cost", "Cost", body)
+    body.append(f'<p class="caveat">{w(RATE_CAVEAT, kind=KIND_AUTHORED)}</p>')
+    return _section(w, "cost", "Cost", body)
 
 
 def _spans_section(
     *,
+    w: _Writer,
     trace: Trace,
     cost: CostReport,
     options: RenderOptions,
@@ -858,7 +912,7 @@ def _spans_section(
             if value
         ]
         preview_cell = "".join(
-            f'<p class="preview">{_t(label)}: {_free(value, previews=options.previews)}</p>'
+            f'<p class="preview">{w(label, kind=KIND_AUTHORED)}: {w(value, kind=KIND_FREE)}</p>'
             for label, value in previews
         )
         error = span.error
@@ -874,24 +928,24 @@ def _spans_section(
         error_cell = (
             "—"
             if error is None
-            else f"{_ident(error.code)}: {_free(error.detail, previews=options.previews)}"
+            else f"{w(error.code, kind=KIND_IDENTIFIER)}: {w(error.detail, kind=KIND_FREE)}"
         )
         body.append(
-            f'<tr id="{_t(span.span_id)}" data-seq="{_n(span.seq)}">'
+            f'<tr id="{w(span.span_id, kind=KIND_AUTHORED)}" data-seq="{_n(span.seq)}">'
             f'<td class="cell-num">{_n(span.seq)}</td>'
-            f"<td>{_t(span.kind)}</td>"
-            f"<td>{_ident(span.agent_id)}</td>"
-            f"<td>{_t(optional_timestamp(span.start) or '—')}</td>"
-            f"<td>{_t(optional_timestamp(span.end) or '—')}</td>"
-            f"<td>{_free_or_dash(span.model, previews=options.previews)}</td>"
-            f"<td>{_free_or_dash(span.stop_reason, previews=options.previews)}</td>"
-            f"<td>{_free_or_dash(span.tool_name, previews=options.previews)}</td>"
-            f"<td>{_free_or_dash(span.tool_use_id, previews=options.previews)}</td>"
-            f"<td>{_t(span.tool_input_digest or '—')}</td>"
-            f"<td>{_t(span.tool_result_status or '—')}</td>"
+            f"<td>{w(span.kind, kind=KIND_AUTHORED)}</td>"
+            f"<td>{w(span.agent_id, kind=KIND_IDENTIFIER)}</td>"
+            f"<td>{w(optional_timestamp(span.start) or '—', kind=KIND_AUTHORED)}</td>"
+            f"<td>{w(optional_timestamp(span.end) or '—', kind=KIND_AUTHORED)}</td>"
+            f"<td>{w.optional(span.model, kind=KIND_FREE)}</td>"
+            f"<td>{w.optional(span.stop_reason, kind=KIND_FREE)}</td>"
+            f"<td>{w.optional(span.tool_name, kind=KIND_FREE)}</td>"
+            f"<td>{w.optional(span.tool_use_id, kind=KIND_FREE)}</td>"
+            f"<td>{w(span.tool_input_digest or '—', kind=KIND_AUTHORED)}</td>"
+            f"<td>{w(span.tool_result_status or '—', kind=KIND_AUTHORED)}</td>"
             f"<td>{error_cell}</td>"
             f'<td class="cell-num">{_n(span.usage.total if span.usage else 0)}</td>'
-            f'<td class="cell-num">{"—" if span_cost is None else _money(span_cost)}</td>'
+            f'<td class="cell-num">{"—" if span_cost is None else w.money(span_cost)}</td>'
             f"<td>{preview_cell}</td></tr>"
         )
     body.append("</table></div>")
@@ -899,12 +953,12 @@ def _spans_section(
     if remaining > 0:
         body.append(
             f'<p class="truncation">…and {_n(remaining)} more span(s). '
-            f"{_t('The JSON report carries every span; this table is capped for the browser.')}</p>"
+            f"{w(SPANS_CAP_NOTE, kind=KIND_AUTHORED)}</p>"
         )
-    return _section("spans", "Spans", body)
+    return _section(w, "spans", "Spans", body)
 
 
-def _warnings_section(trace: Trace) -> list[str]:
+def _warnings_section(w: _Writer, trace: Trace) -> list[str]:
     """R36 + R10: the full parse-warning list.
 
     ``detail`` goes through :func:`_ident` rather than :func:`_free`: R4 puts the
@@ -914,18 +968,21 @@ def _warnings_section(trace: Trace) -> list[str]:
     """
     if not trace.warnings:
         return _section(
-            "warnings", "Parse warnings", ['<p class="empty">The parser tolerated nothing.</p>']
+            w,
+            "warnings",
+            "Parse warnings",
+            ['<p class="empty">The parser tolerated nothing.</p>'],
         )
     body = ['<div class="table-wrap"><table class="table">']
     body.append("<tr><th>code</th><th>count</th><th>detail</th></tr>")
     for warning in trace.warnings:
         body.append(
-            f"<tr><td>{_t(warning.code)}</td>"
+            f"<tr><td>{w(warning.code, kind=KIND_AUTHORED)}</td>"
             f'<td class="cell-num">{_n(warning.count)}</td>'
-            f"<td>{_ident(warning.detail)}</td></tr>"
+            f"<td>{w(warning.detail, kind=KIND_IDENTIFIER)}</td></tr>"
         )
     body.append("</table></div>")
-    return _section("warnings", "Parse warnings", body)
+    return _section(w, "warnings", "Parse warnings", body)
 
 
 def render_html(
@@ -943,6 +1000,7 @@ def render_html(
     ``<script>`` and the one ``<style>`` are written by concatenation, never by
     formatting.
     """
+    w = _Writer(options)
     timeline = build_timeline(trace, findings)
     lines: list[str] = [
         "<!doctype html>",
@@ -961,11 +1019,13 @@ def render_html(
         '<nav class="nav">',
     ]
     lines.extend(
-        f'<a href="#{_anchor(section_id)}">{_t(section_id)}</a>' for section_id in SECTION_IDS
+        f'<a href="#{w(section_id, kind=KIND_AUTHORED)}">{w(section_id, kind=KIND_AUTHORED)}</a>'
+        for section_id in SECTION_IDS
     )
     lines.append("</nav>")
     lines.extend(
         _header_section(
+            w=w,
             trace=trace,
             findings=findings,
             cost=cost,
@@ -974,12 +1034,14 @@ def render_html(
         )
     )
     span_ids = {span.seq: span.span_id for span in trace.spans[:SPANS_TABLE_CAP]}
-    lines.extend(_findings_section(findings=findings, span_ids=span_ids, options=options))
+    lines.extend(_findings_section(w=w, findings=findings, span_ids=span_ids, options=options))
     agents_by_id = {agent.agent_id: agent for agent in trace.agents}
-    lines.extend(_timeline_section(timeline=timeline, agents_by_id=agents_by_id, options=options))
-    lines.extend(_cost_section(cost=cost, options=options))
-    lines.extend(_spans_section(trace=trace, cost=cost, options=options))
-    lines.extend(_warnings_section(trace))
+    lines.extend(
+        _timeline_section(w=w, timeline=timeline, agents_by_id=agents_by_id, options=options)
+    )
+    lines.extend(_cost_section(w=w, cost=cost, options=options))
+    lines.extend(_spans_section(w=w, trace=trace, cost=cost, options=options))
+    lines.extend(_warnings_section(w, trace))
     lines.extend(
         [
             "</main>",

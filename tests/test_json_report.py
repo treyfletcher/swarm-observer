@@ -62,7 +62,6 @@ from swarm_observer.report.json_out import (
     cost_document,
     finding_document,
     format_timestamp,
-    free_text,
     last_timestamp,
     metrics_document,
     optional_timestamp,
@@ -70,6 +69,7 @@ from swarm_observer.report.json_out import (
     report_document,
     severity_counts,
     span_document,
+    text,
     usage_document,
 )
 from swarm_observer.report.redact import marker
@@ -549,8 +549,8 @@ class TestRedactionAtTheBoundaryR33:
 
     def test_r33_free_text_redacts_when_previews_are_on(self) -> None:
         """R33: the boundary applies the redactor rather than trusting upstream."""
-        assert free_text("AKIAIOSFODNN7EXAMPLE", previews=True) == marker("aws_key_id")
-        assert free_text("plain text", previews=True) == "plain text"
+        assert text("AKIAIOSFODNN7EXAMPLE", kind="free", previews=True) == marker("aws_key_id")
+        assert text("plain text", kind="free", previews=True) == "plain text"
 
     def test_r33_a_credential_shaped_preview_is_redacted_in_the_document(self) -> None:
         """R33: end to end through ``span_document``."""
@@ -671,19 +671,21 @@ class TestRedactionAtTheBoundaryR33:
         3. the hostile fixture still renders text at all.
         """
         path = next(p for p in fixture_paths() if p.stem == "hostile")
-        text = render_of(load_trace(path))
-        assert "-----BEGIN RSA PRIVATE KEY-----" not in text
-        assert "PRIVATE KEY" not in text
-        assert marker("private_key") in text
+        # Named `rendered`, not `text`: increment 5 collapsed `free_text` and
+        # `identifier` into `sanitize.text` (C1), which this module now imports.
+        rendered = render_of(load_trace(path))
+        assert "-----BEGIN RSA PRIVATE KEY-----" not in rendered
+        assert "PRIVATE KEY" not in rendered
+        assert marker("private_key") in rendered
         # A *complete* block redacts to exactly one marker: the S14 alternative
         # is ordered after the paired form, so it never splits a whole block.
         complete = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
-        assert free_text(complete, previews=True) == marker("private_key")
+        assert text(complete, kind="free", previews=True) == marker("private_key")
         # The control arm: the document is not empty, and the *other* credential
         # shapes in the same fixture still redact, so this is not a report that
         # simply stopped rendering previews.
-        assert marker("aws_key_id") in text
-        assert len(text) > 1000
+        assert marker("aws_key_id") in rendered
+        assert len(rendered) > 1000
 
     def test_r33_the_truncated_pem_is_absent_under_no_previews(self) -> None:
         """R38: the flag is what actually removes it, which is the point of A10."""
@@ -776,15 +778,16 @@ class TestByDetectorDocumentR31:
 class TestNoPreviewsGuardR38:
     """R38: ``--no-previews`` omits trace free text entirely — the A-c6 guard.
 
-    The guard is new code in ``json_out.free_text`` and is shaped exactly like
+    The guard is the ``free`` branch of ``sanitize.text`` (increment 5 collapsed
+    ``free_text`` into it, C1) and is shaped exactly like
     "correct for the one call path that happens to exist", so it is driven from
     both sides and structurally rather than field by field.
     """
 
     def test_r38_free_text_blanks_rather_than_redacts_under_the_flag(self) -> None:
         """R38: the mode omits the text; it does not merely mask a shape."""
-        assert free_text("anything at all", previews=False) == ""
-        assert free_text("AKIAIOSFODNN7EXAMPLE", previews=False) == ""
+        assert text("anything at all", kind="free", previews=False) == ""
+        assert text("AKIAIOSFODNN7EXAMPLE", kind="free", previews=False) == ""
 
     def test_r38_an_absent_optional_field_stays_null_rather_than_becoming_empty(self) -> None:
         """R2: ``None`` and ``""`` are different claims and stay different."""

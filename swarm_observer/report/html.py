@@ -254,7 +254,9 @@ body {
   padding: 24px;
   background: var(--paper);
   color: var(--ink);
-  font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
 }
 .report { margin: 0 auto; max-width: 1080px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
@@ -374,7 +376,7 @@ def sha256_of(text: str) -> str:
 SCRIPT_SHA256 = "17e03dec80b6d0255ef1f1b3db2ec39ce4903a9e742833c0e0a76c03f348dffb"
 
 #: R34: the pinned digest of :data:`REPORT_STYLE`. See :data:`SCRIPT_SHA256`.
-STYLE_SHA256 = "312051e6d847f74ea6b506fd9d4f2eb530eb04161b32c904d1fb589b3bad84c7"
+STYLE_SHA256 = "97b30480f4024d9a5bfc298962a7d9e9c51e09081e2d4ae666d9f676d82ffa11"
 
 
 def _t(value: str) -> str:

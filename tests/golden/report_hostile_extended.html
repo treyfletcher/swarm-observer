@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>swarm-observer report</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --ink: #16181d;
+  --paper: #ffffff;
+  --muted: #5b6270;
+  --rule: #d7dae1;
+  --panel: #f6f7f9;
+  --info: #4a7fb5;
+  --warning: #b5822a;
+  --critical: #b1442f;
+  --model: #6f7ee0;
+  --tool: #3f9f8f;
+  --user: #9a8ac0;
+  --event: #9aa1ad;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+}
+.report { margin: 0 auto; max-width: 1080px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 0; }
+h3 { font-size: 14px; margin: 16px 0 4px; }
+.section { border-top: 1px solid var(--rule); margin-top: 28px; padding-top: 12px; }
+.section-title { align-items: center; display: flex; gap: 10px; }
+.toggle {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.collapsed > *:not(.section-title) { display: none; }
+.nav { color: var(--muted); display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 0; }
+.nav a { color: var(--muted); }
+.meta-grid {
+  display: grid;
+  gap: 2px 16px;
+  grid-template-columns: max-content 1fr;
+  margin: 10px 0;
+}
+.meta-grid dt { color: var(--muted); }
+.meta-grid dd { margin: 0; overflow-wrap: anywhere; }
+.counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.chip {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.caveat, .note, .provenance, .truncation, .empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0;
+}
+.table-wrap { overflow-x: auto; }
+.table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.table th, .table td {
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.table th { color: var(--muted); font-weight: 600; }
+.cell-num { font-variant-numeric: tabular-nums; text-align: right; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.filter {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+}
+.filter.active { background: var(--panel); font-weight: 600; }
+.hidden { display: none; }
+.finding { border: 1px solid var(--rule); border-radius: 6px; margin: 10px 0; padding: 10px 12px; }
+.finding-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 10px; }
+.finding-body { margin-top: 6px; }
+.sev { border-radius: 4px; color: var(--paper); font-size: 11px; padding: 1px 7px; }
+.finding[data-severity="info"] .sev { background: var(--info); }
+.finding[data-severity="warning"] .sev { background: var(--warning); }
+.finding[data-severity="critical"] .sev { background: var(--critical); }
+.metrics { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.preview {
+  background: var(--panel);
+  border-left: 3px solid var(--rule);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+}
+.lanes { list-style: none; margin: 8px 0; padding: 0; }
+.lanes li { color: var(--muted); font-size: 12px; }
+.lane-name { color: var(--ink); overflow-wrap: anywhere; }
+.timeline { border: 1px solid var(--rule); height: auto; width: 100%; }
+.timeline .lane { fill: var(--panel); }
+.bar.k-model_call { fill: var(--model); }
+.bar.k-tool_call { fill: var(--tool); }
+.bar.k-user_message { fill: var(--user); }
+.bar.k-system_event { fill: var(--event); }
+.bar.s-info { fill: var(--info); }
+.bar.s-warning { fill: var(--warning); }
+.bar.s-critical { fill: var(--critical); }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e7e9ee;
+    --paper: #14161a;
+    --muted: #9aa1ad;
+    --rule: #333842;
+    --panel: #1c1f25;
+  }
+}
+</style>
+</head>
+<body>
+<main class="report">
+<h1>swarm-observer report</h1>
+<nav class="nav">
+<a href="#header">header</a>
+<a href="#findings">findings</a>
+<a href="#timeline">timeline</a>
+<a href="#cost">cost</a>
+<a href="#spans">spans</a>
+<a href="#warnings">warnings</a>
+</nav>
+<section class="section" id="header">
+<div class="section-title"><h2>Run</h2><button class="toggle" type="button">hide</button></div>
+<dl class="meta-grid">
+<dt>trace id</dt><dd>b0191de082c7d271</dd>
+<dt>adapter</dt><dd>claude_code_jsonl</dd>
+<dt>trace schema</dt><dd>1.0.0</dd>
+<dt>report format</dt><dd>1.0.0</dd>
+<dt>swarm-observer</dt><dd>0.1.0</dd>
+<dt>rate snapshot</dt><dd>2026-09-10 (2026-09-10)</dd>
+<dt>previews</dt><dd>included</dd>
+<dt>blocked-gap seconds</dt><dd>60</dd>
+<dt>detectors</dt><dd>repeated_tool_call, agent_loop, retry_storm, failed_tool_call, unresolved_tool_call, blocked_agent, anomalous_span</dd>
+</dl>
+<div class="counts">
+<span class="chip">3 agents</span>
+<span class="chip">14 spans</span>
+<span class="chip">4 findings</span>
+<span class="chip">critical 1</span>
+<span class="chip">warning 2</span>
+<span class="chip">info 1</span>
+<span class="chip">4 parse warnings</span>
+</div>
+<p class="note">2 record(s) had a type this adapter does not know and produced no span. See the warnings section.</p>
+<h3>source files</h3><div class="table-wrap"><table class="table">
+<tr><th>name</th><th>sha256</th><th>bytes</th><th>records</th></tr>
+<tr><td>agent-alpha.jsonl</td><td>28ee48d602cb4a346dfb97d6cf40e019dda93b676ac758df7baaabb7fbd1faed</td><td class="cell-num">4039</td><td class="cell-num">7</td></tr>
+<tr><td>agent-beta.jsonl</td><td>599c4e708afe1629e04a158fec26a2c5ab81f02c325741bd0777e3addc02669c</td><td class="cell-num">82409</td><td class="cell-num">7</td></tr>
+<tr><td>agent-gamma.jsonl</td><td>ffcda3b14ecc07f82ca1f5714ea64adedf116373898c39733f3cc9ef0c39bc97</td><td class="cell-num">967</td><td class="cell-num">2</td></tr>
+</table></div>
+<p class="caveat">Trace-derived text is passed through a credential-shaped-substring redactor. Redaction is a courtesy that reduces accidental exposure in a shared report; it cannot defeat an adversary who controls the trace. Use --no-previews to omit trace free text entirely.</p>
+<p class="caveat">Costs are list-price estimates from a bundled rate snapshot at its snapshot date. They exclude batch and priority tiers, long-context tiers and any negotiated discount, and they are not a billing reconciliation.</p>
+<p class="provenance">swarm-observer 0.1.0; rates 2026-09-10 of 2026-09-10; trace's last timestamp 2026-03-02T09:00:12.000Z. No wall-clock time from this run appears in this document.</p>
+</section>
+<section class="section" id="findings">
+<div class="section-title"><h2>Findings</h2><button class="toggle" type="button">hide</button></div>
+<p class="caveat">Attributed waste sums the usage of model calls the trace shows were repeated or discarded. It is an attribution, not a counterfactual: a deduplicated run would have had different cache behaviour and would not have cost exactly this much less.</p>
+<div class="filters">
+<button class="filter" type="button" data-severity="all">all</button>
+<button class="filter" type="button" data-severity="critical">critical</button>
+<button class="filter" type="button" data-severity="warning">warning</button>
+<button class="filter" type="button" data-severity="info">info</button>
+</div>
+<article class="finding" id="unresolved_tool_call:73ed797ad9db" data-severity="critical" data-detector="unresolved_tool_call">
+<div class="finding-head"><span class="sev">critical</span><strong>unresolved_tool_call</strong><span>1 tool calls of one agent are unresolved (unknown_tool); first at span 4</span></div>
+<div class="finding-body">
+<p><code>unresolved_tool_call:73ed797ad9db</code></p>
+<p class="metrics">occurrences&#x3D;1 · reason&#x3D;unknown_tool · tool_name&#x3D;&lt;non-conforming&gt;</p>
+<p class="metrics">agents: alpha</p>
+<p class="metrics">spans: <a href="#50fb727cc8c88d86">4</a></p>
+<p class="preview">Unknown tool: MARKERtoolresult &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</p>
+<p class="preview">MARKERtoolname &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</p>
+<p class="metrics">attributed waste: 0 tokens, 0.000000 USD</p>
+</div></article>
+<article class="finding" id="repeated_tool_call:be6ae0c74c84" data-severity="warning" data-detector="repeated_tool_call">
+<div class="finding-head"><span class="sev">warning</span><strong>repeated_tool_call</strong><span>one tool was called 2 times with identical arguments (spans 2-4)</span></div>
+<div class="finding-body">
+<p><code>repeated_tool_call:be6ae0c74c84</code></p>
+<p class="metrics">first_seq&#x3D;2 · last_seq&#x3D;4 · occurrences&#x3D;2 · tool_name&#x3D;&lt;non-conforming&gt;</p>
+<p class="metrics">agents: alpha</p>
+<p class="metrics">spans: <a href="#a02c826b21b5a0f4">2</a> <a href="#50fb727cc8c88d86">4</a></p>
+<p class="preview">{&quot;prompt&quot;:&quot;MARKERtoolinput &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;\&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;&quot;}</p>
+<p class="preview">MARKERtoolname &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</p>
+<p class="metrics">attributed waste: 6 tokens, 0.000054 USD</p>
+</div></article>
+<article class="finding" id="repeated_tool_call:d9d42ca55a85" data-severity="warning" data-detector="repeated_tool_call">
+<div class="finding-head"><span class="sev">warning</span><strong>repeated_tool_call</strong><span>one tool was called 2 times with identical arguments (spans 8-10)</span></div>
+<div class="finding-body">
+<p><code>repeated_tool_call:d9d42ca55a85</code></p>
+<p class="metrics">first_seq&#x3D;8 · last_seq&#x3D;10 · occurrences&#x3D;2 · tool_name&#x3D;[redacted:aws_key_id]</p>
+<p class="metrics">agents: beta</p>
+<p class="metrics">spans: <a href="#d203ea51d11cd94e">8</a> <a href="#dbdaba94f3b276fb">10</a></p>
+<p class="preview">{&quot;q&quot;:&quot;the same argument&quot;}</p>
+<p class="metrics">attributed waste: 10 tokens, 0.000022 USD</p>
+</div></article>
+<article class="finding" id="failed_tool_call:ccf56b8781cb" data-severity="info" data-detector="failed_tool_call">
+<div class="finding-head"><span class="sev">info</span><strong>failed_tool_call</strong><span>one tool failed 1 times for one agent (first at span 4)</span></div>
+<div class="finding-body">
+<p><code>failed_tool_call:ccf56b8781cb</code></p>
+<p class="metrics">failures&#x3D;1 · first_seq&#x3D;4 · tool_name&#x3D;&lt;non-conforming&gt;</p>
+<p class="metrics">agents: alpha</p>
+<p class="metrics">spans: <a href="#50fb727cc8c88d86">4</a></p>
+<p class="preview">Unknown tool: MARKERtoolresult &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</p>
+<p class="preview">MARKERtoolname &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</p>
+<p class="metrics">attributed waste: 0 tokens, 0.000000 USD</p>
+</div></article>
+</section>
+<section class="section" id="timeline">
+<div class="section-title"><h2>Timeline</h2><button class="toggle" type="button">hide</button></div>
+<div class="table-wrap"><table class="table">
+<tr><th>lane</th><th>agent index</th><th>agent</th><th>type</th><th>description</th><th>parent</th><th>depth</th><th>spans</th><th>drawn</th></tr>
+<tr data-agent="0"><td class="cell-num">0</td><td class="cell-num">0</td><td class="lane-name">alpha</td><td>—</td><td></td><td>—</td><td class="cell-num">—</td><td class="cell-num">7</td><td class="cell-num">7</td></tr>
+<tr data-agent="1"><td class="cell-num">1</td><td class="cell-num">1</td><td class="lane-name">beta</td><td>MARKERagenttype &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</td><td>MARKERagentdescription &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60; [redacted:aws_key_id]</td><td>alpha</td><td class="cell-num">1</td><td class="cell-num">5</td><td class="cell-num">5</td></tr>
+<tr data-agent="2"><td class="cell-num">2</td><td class="cell-num">2</td><td class="lane-name">[redacted:aws_key_id]</td><td>—</td><td></td><td>—</td><td class="cell-num">—</td><td class="cell-num">2</td><td class="cell-num">2</td></tr>
+</table></div>
+<p class="note">One lane per agent, in agent-index order; the figure spans 12000 ms of trace time. Rect width is a proportion of that span, rounded to whole units.</p>
+<svg class="timeline" viewBox="0 0 1000 66" role="img" aria-label="execution timeline">
+<rect class="lane" x="0" y="0" width="1000" height="22" data-agent="0"></rect>
+<rect class="lane" x="0" y="22" width="1000" height="22" data-agent="1"></rect>
+<rect class="lane" x="0" y="44" width="1000" height="22" data-agent="2"></rect>
+<rect class="bar k-user_message s-none" x="0" y="5" width="1" height="12" data-seq="0" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="83" y="5" width="1" height="12" data-seq="1" data-agent="0"></rect>
+<rect class="bar k-tool_call s-warning" x="83" y="5" width="83" height="12" data-seq="2" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="208" y="5" width="1" height="12" data-seq="3" data-agent="0"></rect>
+<rect class="bar k-tool_call s-critical" x="208" y="5" width="25" height="12" data-seq="4" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="250" y="5" width="1" height="12" data-seq="5" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="333" y="5" width="1" height="12" data-seq="6" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="417" y="27" width="1" height="12" data-seq="7" data-agent="1"></rect>
+<rect class="bar k-tool_call s-warning" x="417" y="27" width="83" height="12" data-seq="8" data-agent="1"></rect>
+<rect class="bar k-model_call s-none" x="583" y="27" width="1" height="12" data-seq="9" data-agent="1"></rect>
+<rect class="bar k-tool_call s-warning" x="583" y="27" width="83" height="12" data-seq="10" data-agent="1"></rect>
+<rect class="bar k-model_call s-none" x="750" y="27" width="1" height="12" data-seq="11" data-agent="1"></rect>
+<rect class="bar k-model_call s-none" x="917" y="49" width="1" height="12" data-seq="12" data-agent="2"></rect>
+<rect class="bar k-tool_call s-none" x="917" y="49" width="83" height="12" data-seq="13" data-agent="2"></rect>
+</svg>
+</section>
+<section class="section" id="cost">
+<div class="section-title"><h2>Cost</h2><button class="toggle" type="button">hide</button></div>
+<dl class="meta-grid">
+<dt>total</dt><dd>0.000200 USD (0.00 USD)</dd>
+<dt>priced spans</dt><dd>6</dd>
+<dt>unpriced spans</dt><dd>2</dd>
+<dt>tokens</dt><dd>40</dd>
+<dt>unpriced tokens</dt><dd>30</dd>
+</dl>
+<p class="note">2 model call(s) could not be priced and contribute nothing to the total above.</p>
+<h3>by agent</h3><div class="table-wrap"><table class="table">
+<tr><th>agent</th><th>index</th><th>priced</th><th>unpriced</th><th>tokens</th><th>cost USD</th></tr>
+<tr><td>alpha</td><td class="cell-num">0</td><td class="cell-num">2</td><td class="cell-num">2</td><td class="cell-num">16</td><td class="cell-num">0.000144</td></tr>
+<tr><td>beta</td><td class="cell-num">1</td><td class="cell-num">3</td><td class="cell-num">0</td><td class="cell-num">22</td><td class="cell-num">0.000050</td></tr>
+<tr><td>[redacted:aws_key_id]</td><td class="cell-num">2</td><td class="cell-num">1</td><td class="cell-num">0</td><td class="cell-num">2</td><td class="cell-num">0.000006</td></tr>
+</table></div>
+<h3>by model</h3><div class="table-wrap"><table class="table">
+<tr><th>model key</th><th>priced</th><th>tokens</th><th>cost USD</th></tr>
+<tr><td>claude-haiku-4-5</td><td class="cell-num">4</td><td class="cell-num">24</td><td class="cell-num">0.000056</td></tr>
+<tr><td>claude-sonnet-4-5</td><td class="cell-num">2</td><td class="cell-num">16</td><td class="cell-num">0.000144</td></tr>
+</table></div>
+<h3>by detector</h3><div class="table-wrap"><table class="table">
+<tr><th>detector</th><th>findings</th><th>unknown cost</th><th>wasted tokens</th><th>of which unpriced</th><th>wasted USD</th></tr>
+<tr><td>failed_tool_call</td><td class="cell-num">1</td><td class="cell-num">0</td><td class="cell-num">0</td><td class="cell-num">0</td><td class="cell-num">0.000000</td></tr>
+<tr><td>repeated_tool_call</td><td class="cell-num">2</td><td class="cell-num">0</td><td class="cell-num">16</td><td class="cell-num">0</td><td class="cell-num">0.000076</td></tr>
+<tr><td>unresolved_tool_call</td><td class="cell-num">1</td><td class="cell-num">0</td><td class="cell-num">0</td><td class="cell-num">0</td><td class="cell-num">0.000000</td></tr>
+</table></div>
+<h3>unpriced model calls</h3>
+<div class="table-wrap"><table class="table">
+<tr><th>seq</th><th>agent</th><th>recorded model</th><th>reason</th><th>missing price keys</th></tr>
+<tr><td class="cell-num">1</td><td>alpha</td><td>MARKERmodelid &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</td><td>model_not_in_snapshot</td><td></td></tr>
+<tr><td class="cell-num">5</td><td>alpha</td><td>&lt;synthetic&gt;</td><td>synthetic_span</td><td></td></tr>
+</table></div>
+<p class="caveat">Costs are list-price estimates from a bundled rate snapshot at its snapshot date. They exclude batch and priority tiers, long-context tiers and any negotiated discount, and they are not a billing reconciliation.</p>
+</section>
+<section class="section" id="spans">
+<div class="section-title"><h2>Spans</h2><button class="toggle" type="button">hide</button></div>
+<div class="table-wrap"><table class="table">
+<tr><th>seq</th><th>kind</th><th>agent</th><th>start</th><th>end</th><th>model</th><th>stop</th><th>tool</th><th>tool use id</th><th>digest</th><th>status</th><th>error</th><th>tokens</th><th>cost USD</th><th>previews</th></tr>
+<tr id="296ffb39c7471ed8" data-seq="0"><td class="cell-num">0</td><td>user_message</td><td>alpha</td><td>2026-03-02T09:00:00.000Z</td><td>2026-03-02T09:00:00.000Z</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">text: &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt;</p></td></tr>
+<tr id="acbb40e8d0fcdca1" data-seq="1"><td class="cell-num">1</td><td>model_call</td><td>alpha</td><td>2026-03-02T09:00:01.000Z</td><td>2026-03-02T09:00:01.000Z</td><td>MARKERmodelid &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</td><td>MARKERstopreason &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">30</td><td class="cell-num">—</td><td><p class="preview">text: MARKERtextpreview &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</p></td></tr>
+<tr id="a02c826b21b5a0f4" data-seq="2"><td class="cell-num">2</td><td>tool_call</td><td>alpha</td><td>2026-03-02T09:00:01.000Z</td><td>2026-03-02T09:00:02.000Z</td><td>—</td><td>—</td><td>MARKERtoolname &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</td><td>toolu_spawn</td><td>502f55ed5f6744ef</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;prompt&quot;:&quot;MARKERtoolinput &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;\&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;&quot;}</p><p class="preview">result: MARKERtoolresult &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60; [redacted:aws_key_id] [redacted:anthropic_key]</p></td></tr>
+<tr id="3ef23ad736c80e22" data-seq="3"><td class="cell-num">3</td><td>model_call</td><td>alpha</td><td>2026-03-02T09:00:02.500Z</td><td>2026-03-02T09:00:02.500Z</td><td>claude-sonnet-4-5-20250929</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">6</td><td class="cell-num">0.000054</td><td></td></tr>
+<tr id="50fb727cc8c88d86" data-seq="4"><td class="cell-num">4</td><td>tool_call</td><td>alpha</td><td>2026-03-02T09:00:02.500Z</td><td>2026-03-02T09:00:02.800Z</td><td>—</td><td>—</td><td>MARKERtoolname &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</td><td>toolu_again</td><td>502f55ed5f6744ef</td><td>error</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;prompt&quot;:&quot;MARKERtoolinput &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;\&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;&quot;}</p><p class="preview">result: Unknown tool: MARKERtoolresult &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</p></td></tr>
+<tr id="441f2355a30c7101" data-seq="5"><td class="cell-num">5</td><td>model_call</td><td>alpha</td><td>2026-03-02T09:00:03.000Z</td><td>2026-03-02T09:00:03.000Z</td><td>&lt;synthetic&gt;</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>__script__script_: MARKERerrordetail &lt;&#x2F;script&gt;&lt;script&gt;alert(1)&lt;&#x2F;script&gt;&quot;&gt;&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt; {{7*7}} ..&#x2F;..&#x2F;etc&#x2F;passwd &#x60;whoami&#x60;</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">text: API Error</p></td></tr>
+<tr id="8f3294bef27a9ca1" data-seq="6"><td class="cell-num">6</td><td>model_call</td><td>alpha</td><td>2026-03-02T09:00:04.000Z</td><td>2026-03-02T09:00:04.000Z</td><td>claude-sonnet-4-5-20250929</td><td>end_turn</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">10</td><td class="cell-num">0.000090</td><td><p class="preview">text: [redacted:private_key]</p></td></tr>
+<tr id="caf2c7556611f835" data-seq="7"><td class="cell-num">7</td><td>model_call</td><td>beta</td><td>2026-03-02T09:00:05.000Z</td><td>2026-03-02T09:00:05.000Z</td><td>claude-haiku-4-5-20251001</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">10</td><td class="cell-num">0.000022</td><td><p class="preview">text: child text</p></td></tr>
+<tr id="d203ea51d11cd94e" data-seq="8"><td class="cell-num">8</td><td>tool_call</td><td>beta</td><td>2026-03-02T09:00:05.000Z</td><td>2026-03-02T09:00:06.000Z</td><td>—</td><td>—</td><td>[redacted:aws_key_id]</td><td>toolu_c1</td><td>e54ebe7ba19afb94</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;q&quot;:&quot;the same argument&quot;}</p><p class="preview">result: ok</p></td></tr>
+<tr id="6080c82afa25272b" data-seq="9"><td class="cell-num">9</td><td>model_call</td><td>beta</td><td>2026-03-02T09:00:07.000Z</td><td>2026-03-02T09:00:07.000Z</td><td>claude-haiku-4-5-20251001</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">10</td><td class="cell-num">0.000022</td><td></td></tr>
+<tr id="dbdaba94f3b276fb" data-seq="10"><td class="cell-num">10</td><td>tool_call</td><td>beta</td><td>2026-03-02T09:00:07.000Z</td><td>2026-03-02T09:00:08.000Z</td><td>—</td><td>—</td><td>[redacted:aws_key_id]</td><td>toolu_c2</td><td>e54ebe7ba19afb94</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;q&quot;:&quot;the same argument&quot;}</p><p class="preview">result: ok</p></td></tr>
+<tr id="75a515ee47729b53" data-seq="11"><td class="cell-num">11</td><td>model_call</td><td>beta</td><td>2026-03-02T09:00:09.000Z</td><td>2026-03-02T09:00:09.000Z</td><td>claude-haiku-4-5-20251001</td><td>end_turn</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">2</td><td class="cell-num">0.000006</td><td><p class="preview">text: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB…</p></td></tr>
+<tr id="097f7a50367d384f" data-seq="12"><td class="cell-num">12</td><td>model_call</td><td>[redacted:aws_key_id]</td><td>2026-03-02T09:00:11.000Z</td><td>2026-03-02T09:00:11.000Z</td><td>claude-haiku-4-5-20251001</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">2</td><td class="cell-num">0.000006</td><td></td></tr>
+<tr id="3bc1cef467a4f3f6" data-seq="13"><td class="cell-num">13</td><td>tool_call</td><td>[redacted:aws_key_id]</td><td>2026-03-02T09:00:11.000Z</td><td>2026-03-02T09:00:12.000Z</td><td>—</td><td>—</td><td>Read</td><td>MARKERtooluseid&lt;script&gt;</td><td>cb1533f3eb417069</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;path&quot;:&quot;&#x2F;tmp&#x2F;x&quot;}</p><p class="preview">result: data:text&#x2F;html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg&#x3D;&#x3D; &lt;!-- ]]&gt; &amp;lt;script&amp;gt; javascript:alert(1)</p></td></tr>
+</table></div>
+</section>
+<section class="section" id="warnings">
+<div class="section-title"><h2>Parse warnings</h2><button class="toggle" type="button">hide</button></div>
+<div class="table-wrap"><table class="table">
+<tr><th>code</th><th>count</th><th>detail</th></tr>
+<tr><td>api_error_record</td><td class="cell-num">1</td><td></td></tr>
+<tr><td>synthetic_model</td><td class="cell-num">1</td><td></td></tr>
+<tr><td>unknown_record_type</td><td class="cell-num">1</td><td>[redacted:github_token]</td></tr>
+<tr><td>unknown_record_type</td><td class="cell-num">1</td><td>totally_unknown_type</td></tr>
+</table></div>
+</section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var doc = document;
+  function each(selector, visit) {
+    var nodes = doc.querySelectorAll(selector);
+    for (var i = 0; i < nodes.length; i += 1) {
+      visit(nodes[i]);
+    }
+  }
+  function applyFilter(wanted) {
+    each(".finding", function (node) {
+      var keep = wanted === "all" || node.getAttribute("data-severity") === wanted;
+      node.classList.toggle("hidden", !keep);
+    });
+    each(".filter", function (node) {
+      node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
+    });
+  }
+  each(".filter", function (node) {
+    node.addEventListener("click", function (event) {
+      applyFilter(event.currentTarget.getAttribute("data-severity"));
+    });
+  });
+  each(".toggle", function (node) {
+    node.addEventListener("click", function (event) {
+      event.currentTarget.parentNode.classList.toggle("collapsed");
+    });
+  });
+  applyFilter("all");
+})();
+</script>
+</body>
+</html>

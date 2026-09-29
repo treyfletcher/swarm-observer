@@ -61,7 +61,32 @@ REQUIRED_CANARIES: dict[str, int] = {
     # way and this is where it is recorded.
 }
 
-CURRENT_INCREMENT = 3
+#: R50's seven required canaries, typed from the requirement rather than read
+#: from :data:`REQUIRED_CANARIES`. The ledger may hold more (the increment-2
+#: review added ``metrics_redaction_dropped``); it may not hold fewer.
+R50_REQUIRED_BY_NAME: frozenset[str] = frozenset(
+    {
+        "determinism_harness",
+        "golden_byte_flip",
+        "injection_probe_identity_escape",
+        "attribute_allowlist_injection",
+        "offline_socket_permitted",
+        "redaction_pattern_removed",
+        "detector_coverage_dropped",
+    }
+)
+
+#: Increment 4 (tester). The four canaries this increment owed —
+#: ``injection_probe_identity_escape``, ``attribute_allowlist_injection``,
+#: ``offline_socket_permitted`` and ``metrics_redaction_dropped`` — are checked
+#: in, so the ledger is bumped in the same commit as they arrive, the way
+#: ``redaction_pattern_removed`` was moved in increment 3. With this bump every
+#: canary R50 names exists and the ledger's outstanding set is **empty**, which
+#: is why ``test_r50_later_canaries_are_ledgered_not_forgotten`` was replaced by
+#: ``test_r50_every_canary_the_requirement_names_is_checked_in``: the old test
+#: asserted the debt was non-empty, and an assertion that a completed ledger
+#: must stay incomplete is not a check anybody should keep.
+CURRENT_INCREMENT = 4
 
 
 def all_test_modules() -> list[str]:
@@ -160,15 +185,40 @@ class TestCanaryLedgerR50:
             path = canaries / f"test_canary_{name}.py"
             assert path.is_file(), f"required canary missing: {path.relative_to(REPO)}"
 
-    def test_r50_later_canaries_are_ledgered_not_forgotten(self) -> None:
-        """R50: the debt is written down with the increment that clears it."""
+    def test_r50_every_canary_the_requirement_names_is_checked_in(self) -> None:
+        """R50: all seven named canaries exist, and the list is the requirement's.
+
+        Replaces ``test_r50_later_canaries_are_ledgered_not_forgotten``, which
+        asserted the outstanding set was **non-empty** — correct while a debt
+        remained and wrong the moment it was paid. Increment 4 delivered the last
+        four, so the check that survives is the one that can still fail: every
+        name R50 lists is in the ledger and has a file.
+
+        Red when: a canary is deleted, renamed, or dropped from the ledger.
+        """
+        canaries = TESTS_DIR / "canaries"
+        assert set(REQUIRED_CANARIES) >= R50_REQUIRED_BY_NAME
+        for name in sorted(R50_REQUIRED_BY_NAME):
+            path = canaries / f"test_canary_{name}.py"
+            assert path.is_file(), f"R50 names this canary and it is missing: {name}"
+            assert REQUIRED_CANARIES[name] <= CURRENT_INCREMENT, name
+
+    def test_r50_a_later_increments_debt_would_still_be_ledgered(self) -> None:
+        """R50: the ledger's outstanding set is a live mechanism, not a dead field.
+
+        The debt is empty today. The mechanism that reports one is asserted
+        against a probe rather than against the real ledger, so it keeps working
+        for increment 5 and does not require a debt to exist in order to pass.
+
+        Red when: the outstanding computation is deleted along with the debt it
+        used to describe.
+        """
+        probe = {**REQUIRED_CANARIES, "narrator_fallback_dropped": 5}
         outstanding = {
-            name: increment
-            for name, increment in REQUIRED_CANARIES.items()
-            if increment > CURRENT_INCREMENT
+            name: increment for name, increment in probe.items() if increment > CURRENT_INCREMENT
         }
-        assert outstanding, "the canary ledger is empty; R50 lists seven required canaries"
-        assert all(increment <= 5 for increment in outstanding.values())
+        assert outstanding == {"narrator_fallback_dropped": 5}
+        assert all(increment <= 5 for increment in REQUIRED_CANARIES.values())
 
     def test_r50_every_canary_module_proves_a_failure(self) -> None:
         """R50: a canary must assert its guard *raises*, whether or not it is required.
@@ -379,6 +429,15 @@ class TestMutationLedgerR49:
             "swarm_observer/cli/main.py",
             "swarm_observer/detect/base.py",
             "swarm_observer/detect/registry.py",
+            # Increment 4 (tester). The coder's write-up named this list as a
+            # gap it would not close unilaterally, because "what a sweep must
+            # cover" is a decision rather than a transcription. These four are
+            # the modules increment 4 created, and every one of them is on the
+            # path a trace byte takes to a rendered document.
+            "swarm_observer/report/escape.py",
+            "swarm_observer/report/sanitize.py",
+            "swarm_observer/report/timeline.py",
+            "swarm_observer/report/html.py",
         ):
             assert required in modules, required
             mine = [item for item in self.live_mutations() if item["module"] == required]

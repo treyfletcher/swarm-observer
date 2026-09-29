@@ -6,7 +6,7 @@
     "tests/canaries/test_canary_golden_byte_flip.py": 7,
     "tests/canaries/test_canary_redaction_pattern_removed.py": 22,
     "tests/test_adversarial_inputs.py": 142,
-    "tests/test_boundaries_and_posture.py": 43,
+    "tests/test_boundaries_and_posture.py": 47,
     "tests/test_cli_analyze.py": 121,
     "tests/test_collapse_r9.py": 33,
     "tests/test_cost_engine.py": 166,
@@ -24,7 +24,7 @@
     "tests/test_rate_snapshot.py": 145,
     "tests/test_reader_and_limits.py": 91,
     "tests/test_record_tolerance.py": 47,
-    "tests/test_redaction.py": 155,
+    "tests/test_redaction.py": 156,
     "tests/test_suite_integrity.py": 22,
     "tests/test_traceability.py": 6,
     "tests/test_warnings_and_spans.py": 58

@@ -546,27 +546,59 @@ class TestExitCodesR39:
         assert out == ""
         assert "invalid choice" in err
 
-    @pytest.mark.parametrize("flag", ["--out", "--explain"])
+    @pytest.mark.parametrize("flag", ["--explain"])
     def test_r39_a_deferred_flag_is_a_usage_error_naming_its_increment(
         self, tmp_path: Path, flag: str
     ) -> None:
-        """A-c10: accepting a flag that does nothing is how a gap becomes a wrong report."""
+        """A-c10: accepting a flag that does nothing is how a gap becomes a wrong report.
+
+        ``--out`` left this parametrization in increment 4, when the HTML
+        renderer arrived and the refusal became the mirror of the defect A-c10
+        is about — a flag that is implemented and still refused. The arm is
+        **replaced**, not deleted: the test below asserts the flag now does what
+        it says, so a future regression that silently stopped writing the HTML
+        report is still red.
+        """
         report = tmp_path / "r.json"
         argv = ["analyze", str(CLEAN), "--json", str(report), flag]
-        if flag == "--out":
-            argv.append(str(tmp_path / "r.html"))
         code, out, err = invoke(*argv)
         assert code == EXIT_USAGE
         assert f"{flag} is not available yet" in err
         assert out == ""
         assert not report.exists()
 
-    def test_r39_a_missing_json_flag_is_a_usage_error(self, tmp_path: Path) -> None:
-        """A-c10: a run that reports success without writing a file is worse."""
+    def test_r38_out_writes_the_html_report_and_is_no_longer_refused(self, tmp_path: Path) -> None:
+        """R38 (increment 4): ``--out`` is accepted, and the file it names exists.
+
+        The replacement for the ``--out`` arm above. Deliberately narrow — it
+        asserts the wiring, not the document. What the document contains is the
+        tester's, and the requirements governing it are still ledgered in
+        ``traceability_pending.txt`` precisely so this citation cannot be
+        mistaken for coverage of them.
+        """
+        report = tmp_path / "r.html"
+        code, out, err = invoke("analyze", str(CLEAN), "--out", str(report))
+        assert (code, err) == (EXIT_OK, "")
+        assert report.is_file()
+        assert report.read_text(encoding="utf-8").startswith("<!doctype html>")
+        assert str(report) in out
+        assert "is not available yet" not in out
+
+    def test_r39_no_output_flag_at_all_is_a_usage_error(self, tmp_path: Path) -> None:
+        """A-c10 + S18: a run that reports success without writing a file is worse.
+
+        R38 writes ``--out`` as required; the increment-3 review's ruling on S18
+        is that a ``--json``-only run is a legitimate invocation for a CI job
+        that gates on ``--fail-on``. What is enforced is therefore "at least one
+        of the two", and both single-flag forms are asserted here so the rule is
+        pinned in all three of its states.
+        """
         code, out, err = invoke("analyze", str(CLEAN))
         assert code == EXIT_USAGE
         assert "--json is required" in err
         assert out == ""
+        assert invoke("analyze", str(CLEAN), "--json", str(tmp_path / "a.json"))[0] == EXIT_OK
+        assert invoke("analyze", str(CLEAN), "--out", str(tmp_path / "a.html"))[0] == EXIT_OK
 
     @pytest.mark.parametrize(
         "argv",

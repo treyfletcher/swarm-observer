@@ -1,0 +1,1000 @@
+"""``report.html`` — the self-contained HTML report (R34, R35, R36).
+
+One file, no build step, no server, no external request of any kind. A human
+opens it in a browser with the local-file origin and forwards it to a colleague,
+which is why this module is where the project's threat model lands hardest: the
+trace was produced by someone else's agent, that agent may have processed a
+hostile web page or repository, and every byte it saw is now being rendered into
+a document somebody will open.
+
+The safety claim is one sentence, and every rule below exists to make it true:
+**no trace-derived byte leaves a text node.**
+
+How that is achieved, in the order it matters:
+
+1. **One escaping boundary, applied to everything.** Every string this module
+   writes — including the ones R16 guarantees this package authored — goes
+   through :func:`~swarm_observer.report.escape.escape_html`, after
+   :mod:`~swarm_observer.report.sanitize`'s redaction. Escaping only the strings
+   known to be untrusted would make the property a fact about this module's
+   knowledge of its inputs; escaping everything makes it a fact about the code.
+   Numbers reach the document only as ``str`` of an ``int`` or as a
+   ``Decimal``'s own formatting (R29), never as a float.
+
+2. **Nothing is interpolated into an executable or attribute context.** The
+   document holds exactly one ``<script>`` and one ``<style>``, both module
+   constants with pinned SHA-256s (:data:`SCRIPT_SHA256`, :data:`STYLE_SHA256`).
+   They are written into the document by concatenation, never by formatting, so
+   interpolating into them is not a thing this module can do by accident. Every
+   attribute value in the document is drawn from :func:`attribute_allowlist`,
+   which is generated from the **inputs** — the trace, the findings, the
+   timeline model — rather than from the rendered text, so a value that appears
+   in the output and not in the allowlist is a leak by definition.
+
+3. **No URL of any scheme** (R35). No ``<link>``, ``<img>``, ``<iframe>``,
+   ``<object>``, ``<embed>``, ``<form>``, ``<base>``, no ``@import``, no font or
+   icon reference, and not even the SVG ``xmlns`` — its only legal value is an
+   ``http:`` URL and an inline ``<svg>`` does not need it. The only ``href``
+   values are same-document fragments.
+
+4. **A CSP meta as the first element of ``<head>`` after ``<meta charset>``**
+   (R34), so a bypass of 1-3 still has nothing to fetch.
+
+**The two fields whose safety rests on a constrained alphabet, named
+explicitly** — because "it looked like an identifier" is how this project's
+worst bug class reached production three increments running:
+
+* ``Span.span_id`` and ``Span.parent_span_id`` are 16 lowercase hex characters
+  (R5, pattern-validated on the model as ``HEX_ID_PATTERN``). They are used as
+  ``id`` and fragment ``href`` values.
+* ``Finding.finding_id`` is ``<detector-slug>:<12 hex>``, pattern-validated on
+  ``Finding`` itself, and its slug half must equal ``Finding.detector``, which
+  is ``^[a-z][a-z0-9_]{0,63}$``. Same two uses.
+
+Both are still escaped, so the alphabet is a second line rather than the only
+one. Everything else that touches an attribute is an integer this package
+computed or a member of a closed enum this package defined. ``Span.agent_id``
+*is* trace-derived and has a constrained alphabet too
+(``^[A-Za-z0-9_.:\\-]{1,64}$``, enforced by the mapper's ``safe_agent_id``), and
+it is deliberately **not** used in an attribute anywhere: ``data-agent`` carries
+``AgentRun.agent_index``, a decimal integer, and the agent id appears only as
+redacted, escaped text. Relying on that alphabet would have worked; not relying
+on it costs nothing.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Iterable, Mapping, Sequence
+from decimal import Decimal
+
+from swarm_observer.cost.compute import (
+    RATE_CAVEAT,
+    WASTE_CAVEAT,
+    CostReport,
+    format_display_usd,
+    format_usd,
+)
+from swarm_observer.detect.base import SEVERITIES, SEVERITY_RANK, Finding
+from swarm_observer.detect.registry import DETECTOR_SLUGS
+from swarm_observer.model.trace import AgentRun, Span, Trace
+from swarm_observer.report.escape import escape_html
+from swarm_observer.report.json_out import (
+    REDACTION_CAVEAT,
+    REPORT_FORMAT_VERSION,
+    last_timestamp,
+    optional_timestamp,
+    severity_counts,
+)
+from swarm_observer.report.sanitize import (
+    RenderOptions,
+    free_text,
+    identifier,
+    metric_value,
+    optional_text,
+)
+from swarm_observer.report.timeline import (
+    LANE_HEIGHT,
+    RECT_CLASSES,
+    Timeline,
+    build_timeline,
+    render_svg,
+)
+
+#: R36: the spans table is capped, with an "…and N more" line. A rendering
+#: concession to a browser and to this file's size; the JSON report emits every
+#: span (A-c9, S19).
+SPANS_TABLE_CAP = 5000
+
+#: How many "no timing" seqs R37's note names before it stops listing them. R37
+#: says untimed spans are "listed in a no-timing note"; it does not say the note
+#: may be two million integers long, and the count is the part a reader needs.
+UNTIMED_LIST_CAP = 200
+
+#: R34, verbatim. The first element of ``<head>`` after ``<meta charset>``.
+CSP_CONTENT = (
+    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+    "img-src data:; base-uri 'none'; form-action 'none'"
+)
+
+#: The ``data-severity`` value the "show everything" filter control carries. Not
+#: a :data:`~swarm_observer.detect.base.SEVERITIES` member — it is spelled
+#: differently on purpose so the closed severity enum stays closed.
+ALL_SEVERITIES = "all"
+
+#: R36's section ids, in the order R36 pins them. The narrative anchor (R43) is
+#: absent by design: with ``--explain`` off "no ``<section id="narrative">``
+#: element exists", and increment 5 inserts it between the header and the
+#: findings.
+SECTION_IDS: tuple[str, ...] = ("header", "findings", "timeline", "cost", "spans", "warnings")
+
+#: Every single-token ``class`` value this module writes. Composite class
+#: attributes are confined to the timeline's rects
+#: (:data:`~swarm_observer.report.timeline.RECT_CLASSES`) because R37 requires
+#: fill to be chosen by fixed CSS classes; everywhere else a variable dimension
+#: is a ``data-`` attribute and the class stays a single fixed token, which is
+#: what keeps the allowlist a set of literals rather than a grammar.
+CSS_CLASSES: frozenset[str] = frozenset(
+    {
+        "active",
+        "bar",
+        "caveat",
+        "cell-num",
+        "chip",
+        "collapsed",
+        "counts",
+        "empty",
+        "filter",
+        "filters",
+        "finding",
+        "finding-body",
+        "finding-head",
+        "hidden",
+        "lane",
+        "lane-name",
+        "lanes",
+        "meta-grid",
+        "metrics",
+        "nav",
+        "note",
+        "preview",
+        "provenance",
+        "report",
+        "section",
+        "section-title",
+        "sev",
+        "table",
+        "table-wrap",
+        "timeline",
+        "toggle",
+        "truncation",
+    }
+)
+
+#: R34: the identifiers the one script may not contain. Exposed as data so the
+#: source-grep check reads this list rather than re-typing it — and so the check
+#: greps :data:`REPORT_SCRIPT`, **not this module's source**, which necessarily
+#: contains every one of these strings right here.
+FORBIDDEN_SCRIPT_APIS: tuple[str, ...] = (
+    "innerHTML",
+    "outerHTML",
+    "insertAdjacentHTML",
+    "document.write",
+    "eval",
+    "Function",
+    "setTimeout",
+    "setInterval",
+    "fetch",
+    "XMLHttpRequest",
+    "WebSocket",
+    "import(",
+)
+
+#: The one script (R34). A constant, never formatted. It does two things —
+#: filter findings by severity and collapse a section — and both are
+#: ``classList`` toggles over nodes already present in the document.
+#:
+#: It contains no ``//``: R35 forbids a scheme-relative URL anywhere in the
+#: file, and a line comment is indistinguishable from one to a check that reads
+#: bytes rather than JavaScript. Comments are ``/* */`` for the same reason.
+REPORT_SCRIPT = """\
+(function () {
+  "use strict";
+  var doc = document;
+  function each(selector, visit) {
+    var nodes = doc.querySelectorAll(selector);
+    for (var i = 0; i < nodes.length; i += 1) {
+      visit(nodes[i]);
+    }
+  }
+  function applyFilter(wanted) {
+    each(".finding", function (node) {
+      var keep = wanted === "all" || node.getAttribute("data-severity") === wanted;
+      node.classList.toggle("hidden", !keep);
+    });
+    each(".filter", function (node) {
+      node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
+    });
+  }
+  each(".filter", function (node) {
+    node.addEventListener("click", function (event) {
+      applyFilter(event.currentTarget.getAttribute("data-severity"));
+    });
+  });
+  each(".toggle", function (node) {
+    node.addEventListener("click", function (event) {
+      event.currentTarget.parentNode.classList.toggle("collapsed");
+    });
+  });
+  applyFilter("all");
+})();
+"""
+
+#: The one stylesheet (R34). A constant, never formatted. No ``@import``, no
+#: font reference, no ``url(...)`` of any kind, and no ``//``.
+REPORT_STYLE = """\
+:root {
+  color-scheme: light dark;
+  --ink: #16181d;
+  --paper: #ffffff;
+  --muted: #5b6270;
+  --rule: #d7dae1;
+  --panel: #f6f7f9;
+  --info: #4a7fb5;
+  --warning: #b5822a;
+  --critical: #b1442f;
+  --model: #6f7ee0;
+  --tool: #3f9f8f;
+  --user: #9a8ac0;
+  --event: #9aa1ad;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+.report { margin: 0 auto; max-width: 1080px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 0; }
+h3 { font-size: 14px; margin: 16px 0 4px; }
+.section { border-top: 1px solid var(--rule); margin-top: 28px; padding-top: 12px; }
+.section-title { align-items: center; display: flex; gap: 10px; }
+.toggle {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.collapsed > *:not(.section-title) { display: none; }
+.nav { color: var(--muted); display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 0; }
+.nav a { color: var(--muted); }
+.meta-grid {
+  display: grid;
+  gap: 2px 16px;
+  grid-template-columns: max-content 1fr;
+  margin: 10px 0;
+}
+.meta-grid dt { color: var(--muted); }
+.meta-grid dd { margin: 0; overflow-wrap: anywhere; }
+.counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.chip {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.caveat, .note, .provenance, .truncation, .empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0;
+}
+.table-wrap { overflow-x: auto; }
+.table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.table th, .table td {
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.table th { color: var(--muted); font-weight: 600; }
+.cell-num { font-variant-numeric: tabular-nums; text-align: right; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.filter {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+}
+.filter.active { background: var(--panel); font-weight: 600; }
+.hidden { display: none; }
+.finding { border: 1px solid var(--rule); border-radius: 6px; margin: 10px 0; padding: 10px 12px; }
+.finding-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 10px; }
+.finding-body { margin-top: 6px; }
+.sev { border-radius: 4px; color: var(--paper); font-size: 11px; padding: 1px 7px; }
+.finding[data-severity="info"] .sev { background: var(--info); }
+.finding[data-severity="warning"] .sev { background: var(--warning); }
+.finding[data-severity="critical"] .sev { background: var(--critical); }
+.metrics { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.preview {
+  background: var(--panel);
+  border-left: 3px solid var(--rule);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+}
+.lanes { list-style: none; margin: 8px 0; padding: 0; }
+.lanes li { color: var(--muted); font-size: 12px; }
+.lane-name { color: var(--ink); overflow-wrap: anywhere; }
+.timeline { border: 1px solid var(--rule); height: auto; width: 100%; }
+.timeline .lane { fill: var(--panel); }
+.bar.k-model_call { fill: var(--model); }
+.bar.k-tool_call { fill: var(--tool); }
+.bar.k-user_message { fill: var(--user); }
+.bar.k-system_event { fill: var(--event); }
+.bar.s-info { fill: var(--info); }
+.bar.s-warning { fill: var(--warning); }
+.bar.s-critical { fill: var(--critical); }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e7e9ee;
+    --paper: #14161a;
+    --muted: #9aa1ad;
+    --rule: #333842;
+    --panel: #1c1f25;
+  }
+}
+"""
+
+
+def sha256_of(text: str) -> str:
+    """The lowercase hex SHA-256 of ``text`` as UTF-8 — R34's pin, as a function."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+#: R34: the pinned digest of :data:`REPORT_SCRIPT`. Checked in as a literal on
+#: purpose. Changing the script costs two edits in two places with the reason
+#: written between them — the same friction ``collection_floor.json`` and
+#: ``LEAK_LEDGER_SIZE`` carry, and the most a single repository can do about a
+#: ledger. The assertion that matters is not this constant against the constant
+#: above but against the ``<script>`` element **as parsed out of the rendered
+#: document**, which is what proves nothing was interpolated at render time.
+SCRIPT_SHA256 = "17e03dec80b6d0255ef1f1b3db2ec39ce4903a9e742833c0e0a76c03f348dffb"
+
+#: R34: the pinned digest of :data:`REPORT_STYLE`. See :data:`SCRIPT_SHA256`.
+STYLE_SHA256 = "312051e6d847f74ea6b506fd9d4f2eb530eb04161b32c904d1fb589b3bad84c7"
+
+
+def _t(value: str) -> str:
+    """A string this package authored, escaped anyway (R32).
+
+    Section headings, column labels, enumerated slugs and the caveat sentences
+    all come through here. None of them can carry a payload today; escaping them
+    means none of them can carry one tomorrow either, and it removes "is this
+    string trusted?" as a question a future editor of this module has to answer
+    correctly on every line.
+    """
+    return escape_html(value)
+
+
+def _n(value: int) -> str:
+    """An integer this package computed. No float ever reaches the document (R47)."""
+    return str(value)
+
+
+def _money(value: Decimal) -> str:
+    """R29's six-decimal string, escaped like everything else."""
+    return escape_html(format_usd(value))
+
+
+def _free(value: str, *, previews: bool) -> str:
+    """Trace free text: redact (R33), blank under ``--no-previews``, escape (R32)."""
+    return escape_html(free_text(value, previews=previews))
+
+
+def _free_or_dash(value: str | None, *, previews: bool) -> str:
+    """:func:`_free` for an optional field, with an em dash for ``None``."""
+    rendered = optional_text(value, previews=previews)
+    return "—" if rendered is None else escape_html(rendered)
+
+
+def _ident(value: str) -> str:
+    """A trace-derived join key: redact in both modes (R33), then escape (R32)."""
+    return escape_html(identifier(value))
+
+
+def _anchor(value: str) -> str:
+    """A same-document fragment ``href`` (R34, R35).
+
+    ``value`` is a ``span_id`` (16 lowercase hex, R5) or a ``finding_id``
+    (``slug:12 hex``, R15), each pattern-validated on its model. Escaped
+    regardless: the alphabet is the reason this is safe and the escape is the
+    reason it stays safe if the alphabet ever moves.
+    """
+    return escape_html(value)
+
+
+def attribute_allowlist(
+    *,
+    trace: Trace,
+    findings: Sequence[Finding],
+    timeline: Timeline,
+) -> dict[str, frozenset[str]]:
+    """R34: every attribute value this document may contain, generated from the inputs.
+
+    Attribute names are lowercase, as :mod:`html.parser` reports them — so
+    ``viewBox`` appears as ``viewbox``.
+
+    The point of generating it from the ``Trace``, the findings and the
+    ``Timeline`` **model** rather than from the rendered bytes is that the
+    resulting check compares the output against a specification of the output. A
+    list harvested from the document would be satisfied by any document,
+    including one with a payload in it, which is this project's signature defect
+    in its purest form.
+
+    The geometry entries are exact value sets rather than "any decimal integer"
+    for the same reason: the set of ``x`` values the figure may use is knowable
+    from the timeline model, so an ``x`` that is not one of them is a leak even
+    though it looks like a number.
+    """
+    span_ids = {span.span_id for span in trace.spans}
+    finding_ids = {finding.finding_id for finding in findings}
+    fragments = {f"#{value}" for value in span_ids | finding_ids | set(SECTION_IDS)}
+    lane_ys = {_n(lane.lane * LANE_HEIGHT) for lane in timeline.lanes}
+    return {
+        "lang": frozenset({"en"}),
+        "charset": frozenset({"utf-8"}),
+        "http-equiv": frozenset({"Content-Security-Policy"}),
+        "content": frozenset({CSP_CONTENT}),
+        "class": frozenset(CSS_CLASSES | RECT_CLASSES),
+        "id": frozenset(set(SECTION_IDS) | span_ids | finding_ids),
+        "href": frozenset(fragments),
+        "type": frozenset({"button"}),
+        "role": frozenset({"img"}),
+        "aria-label": frozenset({"execution timeline"}),
+        "data-severity": frozenset(set(SEVERITIES) | {ALL_SEVERITIES}),
+        "data-detector": frozenset(DETECTOR_SLUGS),
+        "data-agent": frozenset({_n(agent.agent_index) for agent in trace.agents}),
+        "data-seq": frozenset({_n(span.seq) for span in trace.spans}),
+        "viewbox": frozenset({f"0 0 {timeline.width} {max(timeline.height, 1)}"}),
+        "x": frozenset({"0"} | {_n(rect.x) for rect in timeline.rects}),
+        "y": frozenset(lane_ys | {_n(rect.y) for rect in timeline.rects}),
+        "width": frozenset({_n(timeline.width)} | {_n(rect.width) for rect in timeline.rects}),
+        "height": frozenset({_n(LANE_HEIGHT)} | {_n(rect.height) for rect in timeline.rects}),
+    }
+
+
+def _section(section_id: str, title: str, body: Iterable[str]) -> list[str]:
+    """One R36 section: a heading, its collapse control, and its content."""
+    lines = [
+        f'<section class="section" id="{_t(section_id)}">',
+        f'<div class="section-title"><h2>{_t(title)}</h2>'
+        f'<button class="toggle" type="button">hide</button></div>',
+    ]
+    lines.extend(body)
+    lines.append("</section>")
+    return lines
+
+
+def _header_section(
+    *,
+    trace: Trace,
+    findings: Sequence[Finding],
+    cost: CostReport,
+    tool_version: str,
+    options: RenderOptions,
+) -> list[str]:
+    """R36's header block, plus R4's unknown-record-type surfacing.
+
+    ``source_files[].name`` goes through :func:`_ident`: a filename is not
+    trace-derived, but ``analyze <dir>`` reads whatever basenames the directory
+    holds, so it is attacker-influenceable all the same. The increment-3
+    review's ruling on the tester's S21 says exactly this, and the JSON report
+    already treats it this way — "a filename is not trace-derived" is precisely
+    the reading that would put it into HTML raw.
+    """
+    counts = severity_counts(findings)
+    unknown_types = sum(
+        warning.count for warning in trace.warnings if warning.code == "unknown_record_type"
+    )
+    body: list[str] = [
+        '<dl class="meta-grid">',
+        f"<dt>trace id</dt><dd>{_t(trace.trace_id)}</dd>",
+        f"<dt>adapter</dt><dd>{_t(trace.adapter)}</dd>",
+        f"<dt>trace schema</dt><dd>{_t(trace.schema_version)}</dd>",
+        f"<dt>report format</dt><dd>{_t(REPORT_FORMAT_VERSION)}</dd>",
+        f"<dt>swarm-observer</dt><dd>{_t(tool_version)}</dd>",
+        f"<dt>rate snapshot</dt><dd>{_t(cost.meta.version)} ({_t(cost.meta.snapshot_date)})</dd>",
+        f"<dt>previews</dt><dd>{_t('included' if options.previews else 'omitted')}</dd>",
+        f"<dt>blocked-gap seconds</dt><dd>{_n(options.blocked_gap_seconds)}</dd>",
+        f"<dt>detectors</dt><dd>{_t(', '.join(options.detectors) or 'none')}</dd>",
+        "</dl>",
+        '<div class="counts">',
+        f'<span class="chip">{_n(len(trace.agents))} agents</span>',
+        f'<span class="chip">{_n(len(trace.spans))} spans</span>',
+        f'<span class="chip">{_n(len(findings))} findings</span>',
+        f'<span class="chip">critical {_n(counts["critical"])}</span>',
+        f'<span class="chip">warning {_n(counts["warning"])}</span>',
+        f'<span class="chip">info {_n(counts["info"])}</span>',
+        f'<span class="chip">{_n(len(trace.warnings))} parse warnings</span>',
+        "</div>",
+    ]
+    if unknown_types:
+        # R4: "a non-zero `unknown_record_type` count is surfaced in the HTML
+        # header" — the one tolerance that means the adapter did not understand
+        # part of the input, so a reader must see it without scrolling.
+        body.append(
+            f'<p class="note">{_n(unknown_types)} record(s) had a type this adapter does '
+            f"not know and produced no span. See the warnings section.</p>"
+        )
+    body.append('<h3>source files</h3><div class="table-wrap"><table class="table">')
+    body.append("<tr><th>name</th><th>sha256</th><th>bytes</th><th>records</th></tr>")
+    for source in trace.source_files:
+        body.append(
+            f"<tr><td>{_ident(source.name)}</td><td>{_t(source.sha256)}</td>"
+            f'<td class="cell-num">{_n(source.bytes)}</td>'
+            f'<td class="cell-num">{_n(source.records)}</td></tr>'
+        )
+    body.append("</table></div>")
+    body.append(f'<p class="caveat">{_t(REDACTION_CAVEAT)}</p>')
+    body.append(f'<p class="caveat">{_t(RATE_CAVEAT)}</p>')
+    last = last_timestamp(trace)
+    body.append(
+        f'<p class="provenance">swarm-observer {_t(tool_version)}; rates '
+        f"{_t(cost.meta.version)} of {_t(cost.meta.snapshot_date)}; trace's last timestamp "
+        f"{_t(last) if last is not None else _t('none recorded')}. "
+        f"{_t('No wall-clock time from this run appears in this document.')}</p>"
+    )
+    return _section("header", "Run", body)
+
+
+def _grouped(findings: Sequence[Finding]) -> list[Finding]:
+    """R36: severity descending, then detector slug, then ``finding_id``.
+
+    R13 already sorts findings by ``(severity_rank, slug, finding_id)`` — the
+    *ascending* severity order the JSON report emits (A-c8). R36's section
+    layout is the reverse on the first key only, so it is applied here, in the
+    renderer whose requirement it is, rather than by adding a second ordering
+    rule to ``detect/``.
+    """
+    return sorted(
+        findings,
+        key=lambda finding: (
+            -SEVERITY_RANK[finding.severity],
+            finding.detector,
+            finding.finding_id,
+        ),
+    )
+
+
+def _findings_section(
+    *,
+    findings: Sequence[Finding],
+    span_ids: Mapping[int, str],
+    options: RenderOptions,
+) -> list[str]:
+    """R36: the findings, each with summary, severity, metrics, evidence, previews, waste."""
+    body: list[str] = [
+        f'<p class="caveat">{_t(WASTE_CAVEAT)}</p>',
+        '<div class="filters">',
+        f'<button class="filter" type="button" data-severity="{_t(ALL_SEVERITIES)}">all</button>',
+    ]
+    for severity in reversed(SEVERITIES):
+        body.append(
+            f'<button class="filter" type="button" data-severity="{_t(severity)}">'
+            f"{_t(severity)}</button>"
+        )
+    body.append("</div>")
+    if not findings:
+        body.append('<p class="empty">No detector produced a finding for this trace.</p>')
+        return _section("findings", "Findings", body)
+
+    for finding in _grouped(findings):
+        body.append(
+            f'<article class="finding" id="{_t(finding.finding_id)}" '
+            f'data-severity="{_t(finding.severity)}" data-detector="{_t(finding.detector)}">'
+        )
+        body.append(
+            f'<div class="finding-head"><span class="sev">{_t(finding.severity)}</span>'
+            f"<strong>{_t(finding.detector)}</strong>"
+            f"<span>{_t(finding.summary)}</span></div>"
+        )
+        body.append('<div class="finding-body">')
+        body.append(f"<p><code>{_t(finding.finding_id)}</code></p>")
+        if finding.metrics:
+            pairs = " · ".join(
+                f"{key}={metric_value(key, value)}"
+                for key, value in sorted(finding.metrics.items())
+            )
+            body.append(f'<p class="metrics">{_t(pairs)}</p>')
+        if finding.agent_ids:
+            agents = ", ".join(identifier(agent_id) for agent_id in finding.agent_ids)
+            body.append(f'<p class="metrics">agents: {_t(agents)}</p>')
+        if finding.span_seqs:
+            # The link target is the span row's `id`, which is `Span.span_id`
+            # (R5, 16 hex) — never the `seq`, which is not an id in this
+            # document and would not be in R34's allowlist. A span past
+            # `SPANS_TABLE_CAP` has no row, so it is named without a link rather
+            # than linked to an anchor that does not exist.
+            links = " ".join(
+                f'<a href="#{_anchor(span_ids[seq])}">{_n(seq)}</a>' if seq in span_ids else _n(seq)
+                for seq in finding.span_seqs
+            )
+            body.append(f'<p class="metrics">spans: {links}</p>')
+        for preview in finding.previews:
+            body.append(f'<p class="preview">{_free(preview, previews=options.previews)}</p>')
+        waste = finding.wasted
+        cost_text = (
+            "unknown" if finding.wasted_cost_usd is None else format_usd(finding.wasted_cost_usd)
+        )
+        body.append(
+            f'<p class="metrics">attributed waste: {_n(waste.total)} tokens, '
+            f"{_t(cost_text)} USD</p>"
+        )
+        body.append("</div></article>")
+    return _section("findings", "Findings", body)
+
+
+def _timeline_section(
+    *,
+    timeline: Timeline,
+    agents_by_id: Mapping[str, AgentRun],
+    options: RenderOptions,
+) -> list[str]:
+    """R36 + R37: the figure, its legend, and the "no timing" note.
+
+    The legend is HTML and the figure is SVG, and that split is the point: agent
+    ids are trace-derived, so they are rendered as text nodes beside the figure
+    and no trace-derived byte enters the ``<svg>`` at all.
+    """
+    body: list[str] = []
+    # The lane legend is rendered **unconditionally**, before the figure and
+    # whether or not there is a figure. It is the only place ``AgentRun``'s
+    # trace-derived strings — ``agent_id``, ``agent_type``, ``description``,
+    # ``parent_agent_id`` — reach the HTML document, and a legend that appeared
+    # only when some span happened to carry timing would mean "no payload in the
+    # report" was sometimes true because nothing was rendered. That is the shape
+    # of this project's signature defect, and the injection probe runs over this
+    # exact section.
+    body.append('<div class="table-wrap"><table class="table">')
+    body.append(
+        "<tr><th>lane</th><th>agent index</th><th>agent</th><th>type</th>"
+        "<th>description</th><th>parent</th><th>depth</th><th>spans</th><th>drawn</th></tr>"
+    )
+    for lane in timeline.lanes:
+        agent = agents_by_id.get(lane.agent_id)
+        kind = "—" if agent is None else _free_or_dash(agent.agent_type, previews=options.previews)
+        described = "" if agent is None else _free(agent.description, previews=options.previews)
+        parent = (
+            "—" if agent is None or agent.parent_agent_id is None else _ident(agent.parent_agent_id)
+        )
+        depth = "—" if agent is None or agent.depth is None else _n(agent.depth)
+        owned = _n(0 if agent is None else len(agent.span_seqs))
+        body.append(
+            f'<tr data-agent="{_n(lane.agent_index)}">'
+            f'<td class="cell-num">{_n(lane.lane)}</td>'
+            f'<td class="cell-num">{_n(lane.agent_index)}</td>'
+            f'<td class="lane-name">{_ident(lane.agent_id)}</td>'
+            f"<td>{kind}</td>"
+            f"<td>{described}</td>"
+            f"<td>{parent}</td>"
+            f'<td class="cell-num">{depth}</td>'
+            f'<td class="cell-num">{owned}</td>'
+            f'<td class="cell-num">{_n(lane.drawn)}</td></tr>'
+        )
+    body.append("</table></div>")
+    if not timeline.rects:
+        body.append('<p class="empty">No span in this trace carries both a start and an end.</p>')
+    else:
+        body.append(
+            f'<p class="note">One lane per agent, in agent-index order; '
+            f"the figure spans {_n(timeline.span_ms)} ms of trace time. "
+            f"{_t('Rect width is a proportion of that span, rounded to whole units.')}</p>"
+        )
+        body.append(render_svg(timeline))
+    if timeline.untimed_seqs:
+        listed = timeline.untimed_seqs[:UNTIMED_LIST_CAP]
+        shown = ", ".join(_n(seq) for seq in listed)
+        more = len(timeline.untimed_seqs) - len(listed)
+        tail = f" …and {_n(more)} more" if more > 0 else ""
+        body.append(
+            f'<p class="note">{_n(len(timeline.untimed_seqs))} span(s) have no start or no '
+            f"end and are not drawn: {_t(shown)}{tail}</p>"
+        )
+    if not options.previews:
+        body.append(
+            '<p class="note">Previews are omitted; lane labels are redacted identifiers.</p>'
+        )
+    return _section("timeline", "Timeline", body)
+
+
+def _cost_section(*, cost: CostReport, options: RenderOptions) -> list[str]:
+    """R31's four groupings and R30's unpriced table (R36).
+
+    The unpriced count sits beside the grand total, which is the increment-3
+    review's §6 recommendation: a trace on a retired model contributes nothing to
+    the headline figure and only a reader who scrolls to the unpriced section
+    would otherwise know.
+    """
+    body: list[str] = [
+        '<dl class="meta-grid">',
+        f"<dt>total</dt><dd>{_money(cost.total_cost_usd)} USD "
+        f"({_t(format_display_usd(cost.total_cost_usd))} USD)</dd>",
+        f"<dt>priced spans</dt><dd>{_n(cost.priced_spans)}</dd>",
+        f"<dt>unpriced spans</dt><dd>{_n(cost.unpriced_spans)}</dd>",
+        f"<dt>tokens</dt><dd>{_n(cost.total_usage.total)}</dd>",
+        f"<dt>unpriced tokens</dt><dd>{_n(cost.unpriced_usage.total)}</dd>",
+        "</dl>",
+    ]
+    if cost.unpriced_spans:
+        body.append(
+            f'<p class="note">{_n(cost.unpriced_spans)} model call(s) could not be priced and '
+            f"contribute nothing to the total above.</p>"
+        )
+
+    body.append('<h3>by agent</h3><div class="table-wrap"><table class="table">')
+    body.append(
+        "<tr><th>agent</th><th>index</th><th>priced</th><th>unpriced</th>"
+        "<th>tokens</th><th>cost USD</th></tr>"
+    )
+    for agent_row in cost.by_agent:
+        body.append(
+            f"<tr><td>{_ident(agent_row.agent_id)}</td>"
+            f'<td class="cell-num">{_n(agent_row.agent_index)}</td>'
+            f'<td class="cell-num">{_n(agent_row.priced_spans)}</td>'
+            f'<td class="cell-num">{_n(agent_row.unpriced_spans)}</td>'
+            f'<td class="cell-num">{_n(agent_row.usage.total)}</td>'
+            f'<td class="cell-num">{_money(agent_row.cost_usd)}</td></tr>'
+        )
+    body.append("</table></div>")
+
+    body.append('<h3>by model</h3><div class="table-wrap"><table class="table">')
+    body.append("<tr><th>model key</th><th>priced</th><th>tokens</th><th>cost USD</th></tr>")
+    for model_row in cost.by_model:
+        body.append(
+            f"<tr><td>{_t(model_row.model_key)}</td>"
+            f'<td class="cell-num">{_n(model_row.priced_spans)}</td>'
+            f'<td class="cell-num">{_n(model_row.usage.total)}</td>'
+            f'<td class="cell-num">{_money(model_row.cost_usd)}</td></tr>'
+        )
+    body.append("</table></div>")
+
+    body.append('<h3>by detector</h3><div class="table-wrap"><table class="table">')
+    body.append(
+        "<tr><th>detector</th><th>findings</th><th>unknown cost</th>"
+        "<th>wasted tokens</th><th>of which unpriced</th><th>wasted USD</th></tr>"
+    )
+    for detector_row in cost.by_detector:
+        body.append(
+            f"<tr><td>{_t(detector_row.detector)}</td>"
+            f'<td class="cell-num">{_n(detector_row.findings)}</td>'
+            f'<td class="cell-num">{_n(detector_row.findings_unpriced)}</td>'
+            f'<td class="cell-num">{_n(detector_row.wasted.total)}</td>'
+            f'<td class="cell-num">{_n(detector_row.wasted_unpriced.total)}</td>'
+            f'<td class="cell-num">{_money(detector_row.wasted_cost_usd)}</td></tr>'
+        )
+    body.append("</table></div>")
+
+    body.append("<h3>unpriced model calls</h3>")
+    if not cost.unpriced:
+        body.append('<p class="empty">Every model call in this trace was priced.</p>')
+    else:
+        body.append('<div class="table-wrap"><table class="table">')
+        body.append(
+            "<tr><th>seq</th><th>agent</th><th>recorded model</th><th>reason</th>"
+            "<th>missing price keys</th></tr>"
+        )
+        for unpriced in cost.unpriced:
+            body.append(
+                f'<tr><td class="cell-num">{_n(unpriced.seq)}</td>'
+                f"<td>{_ident(unpriced.agent_id)}</td>"
+                f"<td>{_free(unpriced.model, previews=options.previews)}</td>"
+                f"<td>{_t(unpriced.reason)}</td>"
+                f"<td>{_t(', '.join(unpriced.missing_price_keys))}</td></tr>"
+            )
+        body.append("</table></div>")
+    body.append(f'<p class="caveat">{_t(RATE_CAVEAT)}</p>')
+    return _section("cost", "Cost", body)
+
+
+def _spans_section(
+    *,
+    trace: Trace,
+    cost: CostReport,
+    options: RenderOptions,
+) -> list[str]:
+    """R36: every span, capped at :data:`SPANS_TABLE_CAP` rows with an "…and N more" line.
+
+    The per-span cost is looked up from a dict built once, not from
+    ``CostReport.cost_of``, which scans the priced list linearly: over 5,000 rows
+    that would be quadratic. The increment-3 review raised exactly this (C2), and
+    the answer here is that the helper still has no caller in the product.
+
+    ``span.seq`` is used as the row key and the anchor target, and the span is
+    found by iterating ``trace.spans`` rather than by ``trace.spans[seq]``: R6
+    makes ``seq == index`` true for anything the v1 mapper produces and R2 does
+    not require it (review, C4).
+    """
+    cost_by_seq: Mapping[int, Decimal] = {row.seq: row.cost_usd for row in cost.spans}
+    body: list[str] = ['<div class="table-wrap"><table class="table">']
+    body.append(
+        "<tr><th>seq</th><th>kind</th><th>agent</th><th>start</th><th>end</th>"
+        "<th>model</th><th>stop</th><th>tool</th><th>tool use id</th><th>digest</th>"
+        "<th>status</th><th>error</th><th>tokens</th><th>cost USD</th><th>previews</th></tr>"
+    )
+    shown: list[Span] = list(trace.spans[:SPANS_TABLE_CAP])
+    for span in shown:
+        span_cost = cost_by_seq.get(span.seq)
+        # **Every** preview, each in its own labelled block. Rendering only the
+        # first non-empty one — which this table did until the hostile fixture
+        # was rendered by hand — dropped `tool_result_preview` wherever a span
+        # also had text, and that is where `hostile.jsonl` puts its AWS key, its
+        # `sk-ant-` key and its PEM block. The report was poorer for it, and,
+        # far worse, "no credential shape appears in the HTML" was true because
+        # the text was never rendered rather than because it was redacted. A
+        # probe whose subject is absent is the defect this project keeps
+        # shipping; the fix is to render the subject.
+        previews = [
+            (label, value)
+            for label, value in (
+                ("text", span.text_preview),
+                ("input", span.tool_input_preview),
+                ("result", span.tool_result_preview),
+            )
+            if value
+        ]
+        preview_cell = "".join(
+            f'<p class="preview">{_t(label)}: {_free(value, previews=options.previews)}</p>'
+            for label, value in previews
+        )
+        error = span.error
+        error_cell = (
+            "—"
+            if error is None
+            else f"{_t(error.code)}: {_free(error.detail, previews=options.previews)}"
+        )
+        body.append(
+            f'<tr id="{_t(span.span_id)}" data-seq="{_n(span.seq)}">'
+            f'<td class="cell-num">{_n(span.seq)}</td>'
+            f"<td>{_t(span.kind)}</td>"
+            f"<td>{_ident(span.agent_id)}</td>"
+            f"<td>{_t(optional_timestamp(span.start) or '—')}</td>"
+            f"<td>{_t(optional_timestamp(span.end) or '—')}</td>"
+            f"<td>{_free_or_dash(span.model, previews=options.previews)}</td>"
+            f"<td>{_free_or_dash(span.stop_reason, previews=options.previews)}</td>"
+            f"<td>{_free_or_dash(span.tool_name, previews=options.previews)}</td>"
+            f"<td>{_free_or_dash(span.tool_use_id, previews=options.previews)}</td>"
+            f"<td>{_t(span.tool_input_digest or '—')}</td>"
+            f"<td>{_t(span.tool_result_status or '—')}</td>"
+            f"<td>{error_cell}</td>"
+            f'<td class="cell-num">{_n(span.usage.total if span.usage else 0)}</td>'
+            f'<td class="cell-num">{"—" if span_cost is None else _money(span_cost)}</td>'
+            f"<td>{preview_cell}</td></tr>"
+        )
+    body.append("</table></div>")
+    remaining = len(trace.spans) - len(shown)
+    if remaining > 0:
+        body.append(
+            f'<p class="truncation">…and {_n(remaining)} more span(s). '
+            f"{_t('The JSON report carries every span; this table is capped for the browser.')}</p>"
+        )
+    return _section("spans", "Spans", body)
+
+
+def _warnings_section(trace: Trace) -> list[str]:
+    """R36 + R10: the full parse-warning list.
+
+    ``detail`` goes through :func:`_ident` rather than :func:`_free`: R4 puts the
+    unknown record *type* there, which is trace-derived, and R10 constrains it to
+    a slug alphabet. Blanking it under ``--no-previews`` would merge the
+    ``(code, detail)`` pairs R10 aggregates on (review, S16).
+    """
+    if not trace.warnings:
+        return _section(
+            "warnings", "Parse warnings", ['<p class="empty">The parser tolerated nothing.</p>']
+        )
+    body = ['<div class="table-wrap"><table class="table">']
+    body.append("<tr><th>code</th><th>count</th><th>detail</th></tr>")
+    for warning in trace.warnings:
+        body.append(
+            f"<tr><td>{_t(warning.code)}</td>"
+            f'<td class="cell-num">{_n(warning.count)}</td>'
+            f"<td>{_ident(warning.detail)}</td></tr>"
+        )
+    body.append("</table></div>")
+    return _section("warnings", "Parse warnings", body)
+
+
+def render_html(
+    *,
+    trace: Trace,
+    findings: Sequence[Finding],
+    cost: CostReport,
+    tool_version: str,
+    options: RenderOptions,
+) -> str:
+    """The exact bytes of ``report.html`` (R34, R35, R36, R37, R47).
+
+    Sections in R36's pinned order: ``<h1>``, header, (narrative anchor —
+    increment 5, absent), findings, timeline, cost, spans, warnings. The one
+    ``<script>`` and the one ``<style>`` are written by concatenation, never by
+    formatting.
+    """
+    timeline = build_timeline(trace, findings)
+    lines: list[str] = [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="utf-8">',
+        f'<meta http-equiv="Content-Security-Policy" content="{CSP_CONTENT}">',
+        "<title>swarm-observer report</title>",
+        "<style>",
+        REPORT_STYLE.rstrip("\n"),
+        "</style>",
+        "</head>",
+        "<body>",
+        '<main class="report">',
+        "<h1>swarm-observer report</h1>",
+        '<nav class="nav">',
+    ]
+    lines.extend(
+        f'<a href="#{_anchor(section_id)}">{_t(section_id)}</a>' for section_id in SECTION_IDS
+    )
+    lines.append("</nav>")
+    lines.extend(
+        _header_section(
+            trace=trace,
+            findings=findings,
+            cost=cost,
+            tool_version=tool_version,
+            options=options,
+        )
+    )
+    span_ids = {span.seq: span.span_id for span in trace.spans[:SPANS_TABLE_CAP]}
+    lines.extend(_findings_section(findings=findings, span_ids=span_ids, options=options))
+    agents_by_id = {agent.agent_id: agent for agent in trace.agents}
+    lines.extend(_timeline_section(timeline=timeline, agents_by_id=agents_by_id, options=options))
+    lines.extend(_cost_section(cost=cost, options=options))
+    lines.extend(_spans_section(trace=trace, cost=cost, options=options))
+    lines.extend(_warnings_section(trace))
+    lines.extend(
+        [
+            "</main>",
+            "<script>",
+            REPORT_SCRIPT.rstrip("\n"),
+            "</script>",
+            "</body>",
+            "</html>",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+__all__ = [
+    "ALL_SEVERITIES",
+    "CSP_CONTENT",
+    "CSS_CLASSES",
+    "FORBIDDEN_SCRIPT_APIS",
+    "REPORT_SCRIPT",
+    "REPORT_STYLE",
+    "SCRIPT_SHA256",
+    "SECTION_IDS",
+    "SPANS_TABLE_CAP",
+    "STYLE_SHA256",
+    "UNTIMED_LIST_CAP",
+    "attribute_allowlist",
+    "render_html",
+    "sha256_of",
+]

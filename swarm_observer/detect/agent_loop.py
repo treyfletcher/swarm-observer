@@ -98,8 +98,14 @@ class AgentLoop:
 
     def run(self, trace: Trace, config: DetectorConfig) -> tuple[Finding, ...]:
         """Scan each agent's signature sequence for repeated cycles (R19)."""
+        return sort_findings(finding for finding, _ in self.scan_with_waste(trace, config))
+
+    def scan_with_waste(
+        self, trace: Trace, config: DetectorConfig
+    ) -> tuple[tuple[Finding, tuple[int, ...]], ...]:
+        """R19's findings, each with the model calls it attributed (R17, R29)."""
         first_tool = first_tool_call_by_parent(trace)
-        findings: list[Finding] = []
+        found: list[tuple[Finding, tuple[int, ...]]] = []
         for agent_id, spans in spans_by_agent(trace).items():
             calls = [span for span in spans if span.kind == "model_call"]
             signatures = [signature_of(call, first_tool.get(call.span_id)) for call in calls]
@@ -110,35 +116,36 @@ class AgentLoop:
                     break
                 period, start, repeats = loop
                 covered = calls[start : start + repeats * period]
-                redundant = [call.seq for call in calls[start + period : start + repeats * period]]
+                redundant = tuple(
+                    sorted({call.seq for call in calls[start + period : start + repeats * period]})
+                )
                 severity: Severity = (
                     "critical" if repeats >= CRITICAL_REPEATS else self.default_severity
                 )
-                findings.append(
-                    build_finding(
-                        trace=trace,
-                        detector=self.slug,
-                        severity=severity,
-                        summary=(
-                            f"an agent repeated a {period}-step cycle {repeats} times "
-                            f"(spans {covered[0].seq}-{covered[-1].seq})"
-                        ),
-                        metrics={
-                            "end_seq": covered[-1].seq,
-                            "period": period,
-                            "repeats": repeats,
-                            "start_seq": covered[0].seq,
-                        },
-                        span_seqs=[call.seq for call in covered],
-                        agent_ids=[agent_id],
-                        previews=[covered[0].text_preview],
-                        wasted=attribute_waste(trace, redundant),
-                    )
+                finding = build_finding(
+                    trace=trace,
+                    detector=self.slug,
+                    severity=severity,
+                    summary=(
+                        f"an agent repeated a {period}-step cycle {repeats} times "
+                        f"(spans {covered[0].seq}-{covered[-1].seq})"
+                    ),
+                    metrics={
+                        "end_seq": covered[-1].seq,
+                        "period": period,
+                        "repeats": repeats,
+                        "start_seq": covered[0].seq,
+                    },
+                    span_seqs=[call.seq for call in covered],
+                    agent_ids=[agent_id],
+                    previews=[covered[0].text_preview],
+                    wasted=attribute_waste(trace, redundant),
                 )
+                found.append((finding, redundant))
                 # R19: resume past the run just reported, so the same repetition
                 # is never reported twice and a later, separate loop still is.
                 start_floor = start + repeats * period
-        return sort_findings(findings)
+        return tuple(found)
 
 
 #: The registered instance (R13, R48).

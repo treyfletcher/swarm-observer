@@ -14,6 +14,7 @@ fixed, because ``detectors`` (R38) prints it and a report groups by it.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from swarm_observer.detect import (
     agent_loop,
@@ -24,7 +25,13 @@ from swarm_observer.detect import (
     retry_storm,
     unresolved_tool_call,
 )
-from swarm_observer.detect.base import Detector, DetectorConfig, Finding, sort_findings
+from swarm_observer.detect.base import (
+    Detector,
+    DetectorConfig,
+    Finding,
+    WasteAttributor,
+    sort_findings,
+)
 from swarm_observer.model.trace import Trace
 
 #: R13: every detector, in a fixed order.
@@ -62,6 +69,48 @@ def selected_detectors(config: DetectorConfig) -> tuple[Detector, ...]:
     return tuple(detector for detector in ALL_DETECTORS if detector.slug in config.enabled)
 
 
+@dataclass(frozen=True)
+class DetectorRun:
+    """One detection pass: the findings, and what each attributed waste to.
+
+    ``waste_seqs`` maps every produced ``finding_id`` to the ``seq`` values of
+    the ``model_call`` spans its detector named as redundant (R17) — empty for a
+    detector R18-R24 gives no redundancy notion. The cost engine turns that into
+    ``Finding.wasted_cost_usd`` and R31's per-detector waste grouping; see
+    :class:`~swarm_observer.detect.base.WasteAttributor` for why the span list
+    rather than the summed ``TokenUsage`` is what travels.
+
+    Every finding has an entry, including a zero-waste one. An absent key and a
+    key mapping to no spans are different claims, and only one of them is true
+    of a detector that ran.
+    """
+
+    findings: tuple[Finding, ...]
+    waste_seqs: dict[str, tuple[int, ...]]
+
+
+def run_detectors_with_waste(trace: Trace, config: DetectorConfig) -> DetectorRun:
+    """Run every enabled detector once, keeping its waste attribution (R13, R17).
+
+    A detector that implements
+    :class:`~swarm_observer.detect.base.WasteAttributor` is asked for findings
+    and attributions in **one** scan, so the two cannot disagree; the rest are
+    run normally and attribute nothing.
+    """
+    findings: list[Finding] = []
+    waste: dict[str, tuple[int, ...]] = {}
+    for detector in selected_detectors(config):
+        if isinstance(detector, WasteAttributor):
+            for finding, seqs in detector.scan_with_waste(trace, config):
+                findings.append(finding)
+                waste[finding.finding_id] = seqs
+            continue
+        for finding in detector.run(trace, config):
+            findings.append(finding)
+            waste[finding.finding_id] = ()
+    return DetectorRun(findings=sort_findings(findings), waste_seqs=waste)
+
+
 def run_detectors(trace: Trace, config: DetectorConfig) -> tuple[Finding, ...]:
     """Run every enabled detector and return one globally sorted tuple (R13).
 
@@ -69,10 +118,7 @@ def run_detectors(trace: Trace, config: DetectorConfig) -> tuple[Finding, ...]:
     each detector sorts its own output by — so the report's Findings section is
     a function of the trace and the config and nothing else (R47).
     """
-    findings: list[Finding] = []
-    for detector in selected_detectors(config):
-        findings.extend(detector.run(trace, config))
-    return sort_findings(findings)
+    return run_detectors_with_waste(trace, config).findings
 
 
 def slugs_of(detectors: Iterable[Detector]) -> tuple[str, ...]:
@@ -83,8 +129,10 @@ def slugs_of(detectors: Iterable[Detector]) -> tuple[str, ...]:
 __all__ = [
     "ALL_DETECTORS",
     "DETECTOR_SLUGS",
+    "DetectorRun",
     "detector_by_slug",
     "run_detectors",
+    "run_detectors_with_waste",
     "selected_detectors",
     "slugs_of",
 ]

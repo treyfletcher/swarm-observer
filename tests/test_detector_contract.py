@@ -65,6 +65,7 @@ from swarm_observer.model.trace import TokenUsage
 
 from .synthetic_traces import (
     DIGEST_A,
+    DIGEST_B,
     SYNTHETIC_TRACE_ID,
     TraceBuilder,
     at,
@@ -1113,3 +1114,192 @@ def test_r14_r17_a_finding_carrying_evidence_is_internally_consistent() -> None:
     assert len(found) == 1
     assert found[0].span_seqs == (1, 2)
     assert found[0].wasted == tokens(500)
+
+
+class TestRunIsAlreadySortedR13:
+    """R13 (mutations A01, T01): "findings are returned already sorted", per detector.
+
+    ``TestDetectorProtocolR13`` asserts this over the corpus, but for
+    ``agent_loop`` and ``retry_storm`` no fixture produces two findings whose
+    scan order differs from their sorted order — so replacing ``sort_findings``
+    with ``tuple`` in either module left the whole suite green. Since increment
+    3 the pipeline calls ``scan_with_waste`` rather than ``run``, which makes
+    ``run``'s own contract even easier to break unobserved.
+
+    Each case below is built so the *scan* order is critical-then-warning and
+    the *sorted* order is the reverse, and the scan order is asserted first so
+    the test cannot pass by the two coinciding.
+    """
+
+    def test_r13_agent_loop_run_returns_sorted_findings(self) -> None:
+        """R13: two loops in one agent, the critical one first in scan order."""
+        builder = TraceBuilder()
+
+        def cycle(digest: str) -> None:
+            parent = builder.model_call(usage=tokens(10))
+            builder.tool_call(parent=parent, digest=digest)
+
+        for _ in range(4):
+            cycle(DIGEST_A)
+        cycle("00000000000000cc")
+        for _ in range(3):
+            cycle(DIGEST_B)
+        trace = builder.build()
+        detector = detector_by_slug("agent_loop")
+        scanned = [finding for finding, _ in detector.scan_with_waste(trace, DetectorConfig())]
+        assert [finding.severity for finding in scanned] == ["critical", "warning"]
+        assert [finding.severity for finding in detector.run(trace, DetectorConfig())] == [
+            "warning",
+            "critical",
+        ]
+
+    def test_r13_retry_storm_run_returns_sorted_findings(self) -> None:
+        """R13: two storms in one agent, the critical one first in scan order."""
+        builder = TraceBuilder()
+        for _ in range(5):
+            builder.tool_call(status="error", result_preview="boom")
+        for _ in range(15):
+            builder.tool_call(status="ok")
+        for _ in range(3):
+            builder.tool_call(status="error", result_preview="boom")
+        trace = builder.build()
+        detector = detector_by_slug("retry_storm")
+        scanned = [finding for finding, _ in detector.scan_with_waste(trace, DetectorConfig())]
+        assert [finding.severity for finding in scanned] == ["critical", "warning"]
+        assert [finding.severity for finding in detector.run(trace, DetectorConfig())] == [
+            "warning",
+            "critical",
+        ]
+
+    def test_r13_repeated_tool_call_run_returns_sorted_findings(self) -> None:
+        """R13: the third ``WasteAttributor``, for symmetry rather than for a gap."""
+        builder = TraceBuilder()
+        for _ in range(4):
+            parent = builder.model_call(usage=tokens(10))
+            builder.tool_call(parent=parent, digest=DIGEST_A)
+        for _ in range(2):
+            parent = builder.model_call(usage=tokens(10))
+            builder.tool_call(parent=parent, digest=DIGEST_B)
+        trace = builder.build()
+        detector = detector_by_slug("repeated_tool_call")
+        found = detector.run(trace, DetectorConfig())
+        assert [finding.severity for finding in found] == ["warning", "critical"]
+        assert found == sort_findings(found)
+
+
+class TestScanWithWasteContractR17:
+    """R17: what ``scan_with_waste`` promises about its *second* element.
+
+    ``run`` is covered above; the attribution beside each finding is not, and
+    since A-c3 it is the only path by which a dollar figure reaches a finding.
+    Two mutants survived the first sweep here, and both survived for the same
+    reason: everything downstream re-filters. ``attribute_waste`` drops any seq
+    that is not a ``model_call`` with ``usage`` (``detect/base.py``), and the
+    cost engine's ``_relevant_seqs`` drops it again. So a detector may attribute
+    whatever it likes and no number in the report moves.
+
+    That makes the attribution's own shape unobservable except here — which is
+    exactly why it needs a test rather than exactly why it does not. The
+    contract each detector's module docstring states is the thing asserted.
+    """
+
+    def test_r17_retry_storm_attributes_only_the_model_calls_in_the_run(self) -> None:
+        """R17 (mutation T02): "every ``model_call`` in the merged run".
+
+        Dropping the ``kind == "model_call"`` filter hands the cost engine the
+        run's *tool* calls as well. Nothing goes red today because
+        ``attribute_waste`` and ``_relevant_seqs`` both re-filter, so this
+        asserts the detector's own output rather than a number derived from it.
+        The run is built to contain both kinds, which is what makes the
+        assertion able to fail.
+        """
+        builder = TraceBuilder()
+        # A storm of five tool errors with two model calls interleaved, so the
+        # merged run spans both kinds.
+        builder.tool_call(status="error", result_preview="boom")
+        builder.tool_call(status="error", result_preview="boom")
+        builder.model_call(usage=tokens(400))
+        builder.tool_call(status="error", result_preview="boom")
+        builder.model_call(usage=tokens(600))
+        builder.tool_call(status="error", result_preview="boom")
+        builder.tool_call(status="error", result_preview="boom")
+        trace = builder.build()
+
+        scanned = detector_by_slug("retry_storm").scan_with_waste(trace, DetectorConfig())
+        assert len(scanned) == 1
+        finding, attributed = scanned[0]
+
+        kinds = {trace.spans[seq].kind for seq in attributed}
+        assert kinds == {"model_call"}, [(seq, trace.spans[seq].kind) for seq in attributed]
+        assert attributed == (2, 4)
+        # The premise: the run really does contain tool calls that the filter
+        # had to remove. Without this the assertion above could pass on a run
+        # made only of model calls.
+        run_seqs = range(0, 7)
+        assert any(trace.spans[seq].kind == "tool_call" for seq in run_seqs)
+        assert finding.wasted == tokens(1_000)
+
+    def test_r17_retry_storm_waste_and_attribution_describe_the_same_spans(self) -> None:
+        """R17: the property T02 hides behind — ``wasted`` is the attribution's sum.
+
+        Stated as an identity over the attributed list rather than as a literal,
+        so it holds for any run shape and cannot be satisfied by a stale total.
+        """
+        builder = TraceBuilder()
+        for index in range(4):
+            builder.model_call(usage=tokens(100 * (index + 1)))
+            builder.tool_call(status="error", result_preview="boom")
+        trace = builder.build()
+        for finding, attributed in detector_by_slug("retry_storm").scan_with_waste(
+            trace, DetectorConfig()
+        ):
+            expected = TokenUsage()
+            for seq in attributed:
+                span = trace.spans[seq]
+                assert span.kind == "model_call" and span.usage is not None
+                expected = expected.plus(span.usage)
+            assert finding.wasted == expected
+            assert expected.total > 0, "vacuous: nothing was attributed at all"
+
+    def test_r18_repeated_tool_call_emits_groups_in_first_span_order(self) -> None:
+        """R18/R6 (mutation P02): the walk is a function of canonical order.
+
+        ``repeated_tool_call`` sorts its groups by ``spans[0].seq``; the module
+        says so, and R6's canonical order is the reason. The two groups below
+        are *interleaved*: A opens first and closes last, B sits inside it. So
+        first-span order is (A, B) and last-span order is (B, A), and a sort
+        key that reads ``spans[-1].seq`` reverses the emission.
+
+        ``run`` re-sorts by R13's key, which is why the whole suite stayed green
+        on this mutant; ``scan_with_waste`` is where the order is observable.
+        The interleaving is asserted first so the test cannot pass by the two
+        orders coinciding.
+        """
+        builder = TraceBuilder()
+
+        def call(digest: str) -> None:
+            parent = builder.model_call(usage=tokens(10))
+            builder.tool_call(parent=parent, digest=digest, tool_name="Bash")
+
+        call(DIGEST_A)  # A opens at seq 1
+        call(DIGEST_A)
+        call(DIGEST_B)  # B opens at seq 5
+        call(DIGEST_B)
+        call(DIGEST_B)  # B closes at seq 9
+        call(DIGEST_A)
+        call(DIGEST_A)  # A closes at seq 13
+        trace = builder.build()
+
+        by_digest: dict[str | None, list[int]] = {}
+        for span in trace.spans:
+            if span.kind == "tool_call":
+                by_digest.setdefault(span.tool_input_digest, []).append(span.seq)
+        first = sorted(by_digest, key=lambda digest: by_digest[digest][0])
+        last = sorted(by_digest, key=lambda digest: by_digest[digest][-1])
+        assert first == [DIGEST_A, DIGEST_B]
+        assert last == [DIGEST_B, DIGEST_A]
+        assert first != last, "the groups are not interleaved; the test cannot tell the two apart"
+
+        scanned = detector_by_slug("repeated_tool_call").scan_with_waste(trace, DetectorConfig())
+        emitted = [finding.metrics["first_seq"] for finding, _ in scanned]
+        assert emitted == [by_digest[DIGEST_A][0], by_digest[DIGEST_B][0]]

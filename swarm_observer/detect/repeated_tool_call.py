@@ -44,6 +44,17 @@ class RepeatedToolCall:
 
     def run(self, trace: Trace, config: DetectorConfig) -> tuple[Finding, ...]:
         """Group every ``tool_call`` span by name and argument digest (R18)."""
+        return sort_findings(finding for finding, _ in self.scan_with_waste(trace, config))
+
+    def scan_with_waste(
+        self, trace: Trace, config: DetectorConfig
+    ) -> tuple[tuple[Finding, tuple[int, ...]], ...]:
+        """R18's findings, each with the model calls it attributed (R17, R29).
+
+        One scan produces both, so ``Finding.wasted`` and the cost engine's
+        ``wasted_cost_usd`` are two readings of the same span list rather than
+        two computations that agree until one of them is edited.
+        """
         groups: dict[tuple[str | None, str | None], list[Span]] = {}
         for span in trace.spans:
             if span.kind != "tool_call":
@@ -51,7 +62,7 @@ class RepeatedToolCall:
             groups.setdefault((span.tool_name, span.tool_input_digest), []).append(span)
 
         seq_of = seq_by_span_id(trace)
-        findings: list[Finding] = []
+        found: list[tuple[Finding, tuple[int, ...]]] = []
         # Iterate by the group's first span so the walk is a function of
         # canonical order (R6) rather than of dict insertion — the ordering is
         # already deterministic, but a reader should not have to know that.
@@ -63,36 +74,39 @@ class RepeatedToolCall:
             severity: Severity = (
                 "critical" if occurrences >= CRITICAL_OCCURRENCES else self.default_severity
             )
-            redundant = [
-                seq_of[span.parent_span_id]
-                for span in members[1:]
-                if span.parent_span_id is not None and span.parent_span_id in seq_of
-            ]
+            redundant = tuple(
+                sorted(
+                    {
+                        seq_of[span.parent_span_id]
+                        for span in members[1:]
+                        if span.parent_span_id is not None and span.parent_span_id in seq_of
+                    }
+                )
+            )
             previews = [members[0].tool_input_preview]
             if overflow is not None:
                 previews.append(overflow)
-            findings.append(
-                build_finding(
-                    trace=trace,
-                    detector=self.slug,
-                    severity=severity,
-                    summary=(
-                        f"one tool was called {occurrences} times with identical arguments "
-                        f"(spans {members[0].seq}-{members[-1].seq})"
-                    ),
-                    metrics={
-                        "first_seq": members[0].seq,
-                        "last_seq": members[-1].seq,
-                        "occurrences": occurrences,
-                        "tool_name": tool_name,
-                    },
-                    span_seqs=[span.seq for span in members],
-                    agent_ids=[span.agent_id for span in members],
-                    previews=previews,
-                    wasted=attribute_waste(trace, redundant),
-                )
+            finding = build_finding(
+                trace=trace,
+                detector=self.slug,
+                severity=severity,
+                summary=(
+                    f"one tool was called {occurrences} times with identical arguments "
+                    f"(spans {members[0].seq}-{members[-1].seq})"
+                ),
+                metrics={
+                    "first_seq": members[0].seq,
+                    "last_seq": members[-1].seq,
+                    "occurrences": occurrences,
+                    "tool_name": tool_name,
+                },
+                span_seqs=[span.seq for span in members],
+                agent_ids=[span.agent_id for span in members],
+                previews=previews,
+                wasted=attribute_waste(trace, redundant),
             )
-        return sort_findings(findings)
+            found.append((finding, redundant))
+        return tuple(found)
 
 
 #: The registered instance (R13, R48).

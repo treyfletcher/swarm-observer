@@ -80,6 +80,18 @@ def resolve_inputs(paths: Sequence[Path], limits: IngestLimits) -> tuple[Path, .
     if len(paths) > limits.max_files:
         raise TraceLimitError("too_many_files", limit=limits.max_files)
 
+    # Before any `os.stat`-backed call: a path carrying a NUL makes every one of
+    # them raise a bare `ValueError("embedded null byte")`, an exception R11's
+    # posture has no clause for and which walked all the way past `cli.main`
+    # (review, BUG-7). A path the OS cannot represent is unreadable, which is an
+    # answer R11 already has. This sits above the loop below because
+    # `is_symlink()` in the comprehension that follows would raise first.
+    for path in paths:
+        if "\x00" in str(path):
+            # `_sanitize` turns the NUL in the basename into a space, so the
+            # rejected byte is named without being echoed.
+            raise TraceReadError("unreadable_path", source=Path(str(path)).name)
+
     # The set a symlink is allowed to point into: the *non-symlink* paths the
     # caller named. Resolving the symlinks themselves into this set would make
     # the check vacuous — every symlink trivially resolves to its own target.

@@ -619,30 +619,42 @@ class TestRedactionAtTheBoundaryR33:
         assert marker("aws_key_id") in text
         assert marker("anthropic_key") in text
 
-    def test_r33_a_pem_block_whose_terminator_was_truncated_is_not_redacted(self) -> None:
-        """R8 vs R33: the hole the coder flagged, pinned as it behaves today.
+    def test_r33_a_pem_block_whose_terminator_was_truncated_is_redacted(self) -> None:
+        """R8 vs R33 — **S14, closed in increment 4.** This is the place it is recorded.
 
         R8 caps a preview at 240 code points and R33's ``private_key`` pattern
-        needs both ``-----BEGIN … KEY-----`` and ``-----END … KEY-----``. A key
-        longer than the remaining budget loses its terminator, so the pattern
-        cannot match and the header plus the first ~60 characters of key
-        material reach the report.
+        needed both ``-----BEGIN … KEY-----`` and ``-----END … KEY-----``. A key
+        longer than the remaining budget lost its terminator, so the pattern
+        could not match and the header plus the first ~60 characters of key
+        material reached the report. The increment-3 tester pinned that
+        behaviour here with the note "when R33 gains an unterminated
+        alternative, this test fails and is the place to record it"; the
+        increment-3 review ruled the amendment must land **before** the HTML
+        renderer ships, because increment 4 is when those bytes reach a browser.
 
-        This is pinned rather than xfailed because the fix is an amendment to
-        R33's table, which the requirement pins verbatim: the implementation is
-        a faithful transcription and changing it here would put code and spec
-        out of step silently. When R33 gains an unterminated alternative, this
-        test fails and is the place to record it.
+        The assertion is therefore inverted, in place, rather than deleted.
+        Three arms, because "the header is absent" is satisfied perfectly by a
+        renderer that emits nothing:
+
+        1. the truncated block is gone and its marker is present;
+        2. a **complete** block still redacts as one unit, which is what the
+           paired branch running first buys;
+        3. the hostile fixture still renders text at all.
         """
         path = next(p for p in fixture_paths() if p.stem == "hostile")
         text = render_of(load_trace(path))
-        assert "-----BEGIN RSA PRIVATE KEY-----" in text
-        assert "-----END RSA PRIVATE KEY-----" not in text
-        assert marker("private_key") not in text
-        # A *complete* block, which fits inside the preview budget, does redact —
-        # so the miss above is about the truncation and not about the pattern.
+        assert "-----BEGIN RSA PRIVATE KEY-----" not in text
+        assert "PRIVATE KEY" not in text
+        assert marker("private_key") in text
+        # A *complete* block redacts to exactly one marker: the S14 alternative
+        # is ordered after the paired form, so it never splits a whole block.
         complete = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
         assert free_text(complete, previews=True) == marker("private_key")
+        # The control arm: the document is not empty, and the *other* credential
+        # shapes in the same fixture still redact, so this is not a report that
+        # simply stopped rendering previews.
+        assert marker("aws_key_id") in text
+        assert len(text) > 1000
 
     def test_r33_the_truncated_pem_is_absent_under_no_previews(self) -> None:
         """R38: the flag is what actually removes it, which is the point of A10."""

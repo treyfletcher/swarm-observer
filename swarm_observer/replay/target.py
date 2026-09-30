@@ -42,7 +42,7 @@ a declaration-only module makes:
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Annotated, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,6 +51,14 @@ from swarm_observer.model.trace import Trace
 #: The slug alphabet :attr:`ReplayResult.notes` admits. Same shape R10 uses for
 #: a parse warning's code, and for the same reason.
 NOTE_SLUG_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+
+#: :data:`NOTE_SLUG_PATTERN` as an annotation, so the constraint is **applied**
+#: and not merely declared. The first draft of this module defined the pattern
+#: and never used it, which made the docstring's "never free text" a sentence
+#: nothing enforced — a constraint stated and not applied is this project's
+#: signature defect in the one module whose whole purpose is to state
+#: constraints. Caught by driving the validator by hand before writing it up.
+NoteSlug = Annotated[str, Field(pattern=NOTE_SLUG_PATTERN)]
 
 
 class ReplaySelection(BaseModel):
@@ -96,16 +104,11 @@ class ReplayResult(BaseModel):
     #: How many of those diverged from the recorded span.
     diverged_spans: int = Field(default=0, ge=0)
     #: Enumerated slugs only — never a message from the replayed system.
-    notes: tuple[str, ...] = ()
-
-    def _pinned_shape(self) -> None:
-        """Placeholder for v2's validators. Deliberately not wired.
-
-        A declaration-only module with a live validator would be a module with
-        behaviour, which is what "no implementation" forbids; writing the
-        method and not registering it records the intent without creating a
-        code path nothing can execute.
-        """
+    #: Constrained by :data:`NoteSlug`, so the rule is enforced by the model
+    #: rather than asked of a future implementer. A field-level constraint is
+    #: a declaration, not behaviour, and every other model in this package
+    #: states its alphabet the same way.
+    notes: tuple[NoteSlug, ...] = ()
 
 
 @runtime_checkable

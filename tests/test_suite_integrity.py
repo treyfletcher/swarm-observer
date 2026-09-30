@@ -254,14 +254,34 @@ class TestCanaryLedgerR50:
         "canary" that never asserts a failure is a canary in name only, and is
         the thing R50 exists to prevent. That is now checked directly, so an
         extra canary is welcome and an inert one is not.
+
+        **Widened by the increment-5 review, and the reason is the same one
+        that widened it the first time.** The check was ``"pytest.raises" in
+        source`` — a syntactic form, not the property. Some guards cannot be
+        proven to fail in the process running the assertion: R49's two hooks
+        fail a run by setting the **session's exit status**, so the only
+        faithful proof is a subprocess whose return code is non-zero. AC14
+        names both of those as required canaries and neither had one, partly
+        because the directory's own gate rejected the only shape in which
+        they can be written. A guard whose form requirement excludes the
+        guards it most needs is, once again, this project's signature defect
+        wearing a suite-integrity badge.
+
+        So either proof is accepted, and an inert canary is still refused.
         """
         canaries = sorted((TESTS_DIR / "canaries").glob("test_canary_*.py"))
         assert canaries, "the canary directory is empty"
         for path in canaries:
             source = path.read_text(encoding="utf-8")
-            assert "pytest.raises" in source, (
+            # Two ways to observe a guard failing: it raises here, or it fails
+            # a session over there. Nothing else counts.
+            raises = "pytest.raises" in source
+            exits_non_zero = "returncode != 0" in source
+            assert raises or exits_non_zero, (
                 f"{path.relative_to(REPO)} asserts no failure; a canary that cannot "
-                "observe its guard failing is a canary in name only (R50)"
+                "observe its guard failing is a canary in name only (R50). Assert "
+                "`pytest.raises(...)`, or a subprocess `returncode != 0` for a guard "
+                "whose failure is a session exit status."
             )
             assert "R50" in source, f"{path.relative_to(REPO)} does not cite R50"
 

@@ -38,9 +38,10 @@ from __future__ import annotations
 import types
 import typing
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from swarm_observer.model.trace import (
     TRACE_SCHEMA_VERSION,
@@ -52,9 +53,12 @@ from swarm_observer.model.trace import (
     TokenUsage,
     Trace,
 )
+from swarm_observer.report.narrative import Narrative, NarrativeParagraph
 from swarm_observer.report.redact import marker
 
-from .pipeline import analyze_trace
+from .hostile_corpus import R51_CREDENTIALS
+from .pipeline import analyze_paths, analyze_trace
+from .sentinel_trace import write_sentinel_trace
 
 #: Every string-valued field of the normalized model that a report must treat as
 #: untrusted: its bytes came out of the trace (R2, R4, R5, R8, R12), or, for
@@ -450,3 +454,128 @@ class TestTheSweepIsNotVacuous:
                 f"{model.__name__}.{field} does not hold its credential; "
                 "every absence assertion about it is vacuous"
             )
+
+
+#: Increment 5 added a **second** family of renderable models, in
+#: ``report/narrative.py``, and nothing above sweeps them: ``SWEPT_MODELS`` is a
+#: hand-written tuple of the ``model/trace.py`` classes. That is the list this
+#: module exists to abolish, one level up — the fields are derived, the *models*
+#: are not — and the fifth occurrence of the leak family (**BUG-16**,
+#: ``NarrativeParagraph.title`` written with the ``authored`` kind while
+#: constrained only by length) landed in exactly the model the list did not
+#: name. Added by the increment-5 review.
+NARRATIVE_UNTRUSTED_FIELDS: tuple[tuple[type[BaseModel], str], ...] = (
+    (NarrativeParagraph, "title"),
+    (NarrativeParagraph, "text"),
+)
+
+#: The narrative fields no attacker-influenced byte can occupy, with the reason.
+#: Both are pattern-constrained to ``^[a-z][a-z0-9_]{0,63}$``, an alphabet that
+#: contains no credential shape R33 knows and no character ``escape_html``
+#: replaces — which is the claim ``title`` could not make and why it is above.
+NARRATIVE_AUTHORED_FIELDS: tuple[tuple[type[BaseModel], str], ...] = (
+    (NarrativeParagraph, "group"),
+    (NarrativeParagraph, "reason"),
+)
+
+NARRATIVE_MODELS: tuple[type[BaseModel], ...] = (Narrative, NarrativeParagraph)
+
+
+class TestTheNarrativeModelIsSweptToo:
+    """R33/R43: the partition, extended to the models increment 5 made renderable.
+
+    The point is not the two fields. It is that ``report/narrative.py`` was a
+    new renderable model with no sweep, and the project's recurring defect
+    found it within one increment — for the fifth time, and for the same
+    reason every time: a field was classified by the caller that existed
+    rather than by its own type.
+    """
+
+    def test_r33_every_string_field_of_the_narrative_model_is_classified(self) -> None:
+        """R33: a string field added to ``report/narrative.py`` is untrusted or authored.
+
+        Red when: a renderable narrative field is added and classified by
+        nobody — which is the state ``title`` shipped in.
+        """
+        classified = {
+            (model, field)
+            for model, field in NARRATIVE_UNTRUSTED_FIELDS + NARRATIVE_AUTHORED_FIELDS
+        }
+        unclassified = [
+            f"{model.__name__}.{field}"
+            for model in NARRATIVE_MODELS
+            for field in string_fields(model)
+            if (model, field) not in classified
+        ]
+        assert not sorted(unclassified), (
+            f"unclassified string field(s): {sorted(unclassified)}. Add each to "
+            "NARRATIVE_UNTRUSTED_FIELDS (and make both renderers redact it) or to "
+            "NARRATIVE_AUTHORED_FIELDS with the reason no attacker-influenced byte "
+            "can reach it."
+        )
+
+    def test_r33_the_narrative_classification_names_only_fields_that_exist(self) -> None:
+        """R33: the other direction — no dead entry widening the authored class."""
+        for model, field in NARRATIVE_UNTRUSTED_FIELDS + NARRATIVE_AUTHORED_FIELDS:
+            assert field in string_fields(model), f"{model.__name__}.{field} is not a string field"
+
+    def test_r33_an_authored_narrative_field_cannot_hold_a_credential(self) -> None:
+        """R33: the authored class is a claim, so it is checked rather than asserted.
+
+        ``group`` and ``reason`` are in the authored class because their
+        pattern refuses every credential shape R33 knows — not because the
+        product happens to pass slugs. This drives the pattern.
+        """
+        for model, field in NARRATIVE_AUTHORED_FIELDS:
+            assert model is NarrativeParagraph
+            for credential in R51_CREDENTIALS.values():
+                with pytest.raises(ValidationError):
+                    NarrativeParagraph(
+                        **{  # type: ignore[arg-type]
+                            "group": "overall",
+                            "title": "the whole run",
+                            "text": "a paragraph",
+                            field: credential,
+                        }
+                    )
+
+    @pytest.mark.parametrize("previews", [True, False])
+    @pytest.mark.parametrize(
+        ("field", "credential"),
+        [
+            (field, name)
+            for _, field in NARRATIVE_UNTRUSTED_FIELDS
+            for name in ("aws_key_id", "anthropic_key")
+        ],
+    )
+    def test_r33_an_untrusted_narrative_field_is_redacted_in_both_documents(
+        self, field: str, credential: str, previews: bool, tmp_path: Path
+    ) -> None:
+        """R33/R43: each untrusted narrative field, in both renderers and both modes.
+
+        The read-back arm the module's other sweep has: the credential is
+        demonstrably *in* the field, so the absence assertion is not vacuous.
+
+        Red when: either renderer claims a narrative field is its own.
+        """
+        value = R51_CREDENTIALS[credential]
+        paragraph = NarrativeParagraph(
+            **{  # type: ignore[arg-type]
+                "group": "overall",
+                "title": "the whole run",
+                "text": "a paragraph",
+                field: f"prefix {value} suffix",
+            }
+        )
+        assert value in getattr(paragraph, field), "the field does not hold its credential"
+        analysis = analyze_paths(
+            write_sentinel_trace(tmp_path / "t"),
+            previews=previews,
+            narrative=Narrative(paragraphs=(paragraph,), calls=1),
+        )
+        for document in (analysis.html, analysis.json):
+            assert value not in document
+            assert marker(credential) in document
+            # Redacted, not blanked: A-e9 keeps the narrative under
+            # ``--no-previews`` and the surrounding words prove it.
+            assert "prefix" in document and "suffix" in document

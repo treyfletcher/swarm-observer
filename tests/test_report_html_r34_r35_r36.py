@@ -152,6 +152,11 @@ ATTRIBUTE_SHAPES: dict[str, object] = {
     "type": lambda value: value == "button",
     "role": lambda value: value == "img",
     "aria-label": lambda value: value == "execution timeline",
+    # BUG-19 (increment-5 post-review): the collapse control now reports its
+    # state. It is a pure boolean by R34's own logic — a value outside
+    # {"true", "false"} would mean something variable reached an attribute,
+    # which is the one thing R34 forbids.
+    "aria-expanded": lambda value: value in {"true", "false"},
     "data-severity": lambda value: value in {*SEVERITIES, ALL_SEVERITIES},
     "data-detector": lambda value: value in DETECTOR_SLUGS,
     "data-agent": lambda value: bool(_DECIMAL.match(value)),
@@ -1065,6 +1070,10 @@ class TestWaveFiveGapsR4R34R37:
             "type": {"button"},
             "role": {"img"},
             "aria-label": {"execution timeline"},
+            # BUG-19: both values, not just the rendered initial one — the
+            # script writes the other at runtime and the allowlist is the
+            # statement of what the *document* may hold, before and after.
+            "aria-expanded": {"true", "false"},
             "class": set(CSS_CLASSES) | set(RECT_CLASSES),
             "data-severity": set(SEVERITIES) | {ALL_SEVERITIES},
             "data-detector": set(DETECTOR_SLUGS),

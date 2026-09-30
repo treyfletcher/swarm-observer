@@ -144,7 +144,7 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 <a href="#warnings">warnings</a>
 </nav>
 <section class="section" id="header">
-<div class="section-title"><h2>Run</h2><button class="toggle" type="button">hide</button></div>
+<div class="section-title"><h2>Run</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <dl class="meta-grid">
 <dt>trace id</dt><dd>b0191de082c7d271</dd>
 <dt>adapter</dt><dd>claude_code_jsonl</dd>
@@ -177,7 +177,7 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 <p class="provenance">swarm-observer 0.1.0; rates 2026-09-10 of 2026-09-10; trace's last timestamp 2026-03-02T09:00:12.000Z. No wall-clock time from this run appears in this document.</p>
 </section>
 <section class="section" id="findings">
-<div class="section-title"><h2>Findings</h2><button class="toggle" type="button">hide</button></div>
+<div class="section-title"><h2>Findings</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <p class="caveat">Attributed waste sums the usage of model calls the trace shows were repeated or discarded. It is an attribution, not a counterfactual: a deduplicated run would have had different cache behaviour and would not have cost exactly this much less.</p>
 <div class="filters">
 <button class="filter" type="button" data-severity="all">all</button>
@@ -216,7 +216,7 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 </div></article>
 </section>
 <section class="section" id="timeline">
-<div class="section-title"><h2>Timeline</h2><button class="toggle" type="button">hide</button></div>
+<div class="section-title"><h2>Timeline</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <div class="table-wrap"><table class="table">
 <tr><th>lane</th><th>agent index</th><th>agent</th><th>type</th><th>description</th><th>parent</th><th>depth</th><th>spans</th><th>drawn</th></tr>
 <tr data-agent="0"><td class="cell-num">0</td><td class="cell-num">0</td><td class="lane-name">alpha</td><td>—</td><td></td><td>—</td><td class="cell-num">—</td><td class="cell-num">7</td><td class="cell-num">7</td></tr>
@@ -246,7 +246,7 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 <p class="note">Previews are omitted; lane labels are redacted identifiers.</p>
 </section>
 <section class="section" id="cost">
-<div class="section-title"><h2>Cost</h2><button class="toggle" type="button">hide</button></div>
+<div class="section-title"><h2>Cost</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <dl class="meta-grid">
 <dt>total</dt><dd>0.000200 USD (0.00 USD)</dd>
 <dt>priced spans</dt><dd>6</dd>
@@ -280,7 +280,7 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 <p class="caveat">Costs are list-price estimates from a bundled rate snapshot at its snapshot date. They exclude batch and priority tiers, long-context tiers and any negotiated discount, and they are not a billing reconciliation.</p>
 </section>
 <section class="section" id="spans">
-<div class="section-title"><h2>Spans</h2><button class="toggle" type="button">hide</button></div>
+<div class="section-title"><h2>Spans</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <div class="table-wrap"><table class="table">
 <tr><th>seq</th><th>kind</th><th>agent</th><th>start</th><th>end</th><th>model</th><th>stop</th><th>tool</th><th>tool use id</th><th>digest</th><th>status</th><th>error</th><th>tokens</th><th>cost USD</th><th>previews</th></tr>
 <tr id="296ffb39c7471ed8" data-seq="0"><td class="cell-num">0</td><td>user_message</td><td>alpha</td><td>2026-03-02T09:00:00.000Z</td><td>2026-03-02T09:00:00.000Z</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td></td></tr>
@@ -300,7 +300,7 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 </table></div>
 </section>
 <section class="section" id="warnings">
-<div class="section-title"><h2>Parse warnings</h2><button class="toggle" type="button">hide</button></div>
+<div class="section-title"><h2>Parse warnings</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <div class="table-wrap"><table class="table">
 <tr><th>code</th><th>count</th><th>detail</th></tr>
 <tr><td>api_error_record</td><td class="cell-num">1</td><td></td></tr>
@@ -329,6 +329,12 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
       node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
     });
   }
+  function setExpanded(section, expanded) {
+    var button = section.querySelector(".section-title .toggle");
+    section.classList.toggle("collapsed", !expanded);
+    button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    button.textContent = expanded ? "hide" : "show";
+  }
   each(".filter", function (node) {
     node.addEventListener("click", function (event) {
       applyFilter(event.currentTarget.getAttribute("data-severity"));
@@ -336,7 +342,8 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
   });
   each(".toggle", function (node) {
     node.addEventListener("click", function (event) {
-      event.currentTarget.parentNode.classList.toggle("collapsed");
+      var section = event.currentTarget.closest(".section");
+      setExpanded(section, section.classList.contains("collapsed"));
     });
   });
   applyFilter("all");

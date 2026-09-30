@@ -1,5 +1,5 @@
 {
-  "comment": "R49: module path -> minimum collected test count. Checked in and raised deliberately (A11). A module that collects fewer than its floor, or nothing at all, fails the session. Adding tests never breaks a floor. Every test module must appear here; tests/test_suite_integrity.py enforces that. Increment 4 (tester) adds the seven report/security modules and the four R50 canaries, and raises every floor to its post-increment count. Increment 5 (tester) adds the four narrator/AC12 modules, the replay-seam module, the live_narrator module and the narrator_fallback_dropped canary, and raises tests/test_boundaries_and_posture.py by one for the redact call-site scan. The increment-5 REVIEW adds tests/canaries/test_canary_suite_integrity_hooks.py: AC14 requires a checked-in canary for each of six failures and the two hook clauses -- the collection floor and the unlisted-skip allowlist -- had none, only unit tests of the pure helpers conftest.py factored out of them.",
+  "comment": "R49: module path -> minimum collected test count. Checked in and raised deliberately (A11). A module that collects fewer than its floor, or nothing at all, fails the session. Adding tests never breaks a floor. Every test module must appear here; tests/test_suite_integrity.py enforces that. Increment 4 (tester) adds the seven report/security modules and the four R50 canaries, and raises every floor to its post-increment count. Increment 5 (tester) adds the four narrator/AC12 modules, the replay-seam module, the live_narrator module and the narrator_fallback_dropped canary, and raises tests/test_boundaries_and_posture.py by one for the redact call-site scan. The increment-5 REVIEW adds tests/canaries/test_canary_suite_integrity_hooks.py: AC14 requires a checked-in canary for each of six failures and the two hook clauses -- the collection floor and the unlisted-skip allowlist -- had none, only unit tests of the pure helpers conftest.py factored out of them. The increment-5 POST-REVIEW adds tests/test_browser_suite_wiring.py: BUG-19 was invisible to every static check, so the behavioural checks live in tests_browser/ behind their own CI job and this module is the offline suite's seam onto that job.",
   "modules": {
     "tests/canaries/test_canary_attribute_allowlist_injection.py": 6,
     "tests/canaries/test_canary_detector_coverage_dropped.py": 29,
@@ -13,6 +13,7 @@
     "tests/canaries/test_canary_suite_integrity_hooks.py": 10,
     "tests/test_adversarial_inputs.py": 142,
     "tests/test_boundaries_and_posture.py": 58,
+    "tests/test_browser_suite_wiring.py": 14,
     "tests/test_cli_analyze.py": 125,
     "tests/test_collapse_r9.py": 33,
     "tests/test_cost_engine.py": 166,

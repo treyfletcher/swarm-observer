@@ -48,3 +48,46 @@ jobs:
               -u AWS_PROFILE -u OPENAI_API_KEY -u GH_TOKEN \
               python -m pytest -m "not live_narrator" \
               --cov=swarm_observer --cov-report=term-missing
+
+  # BUG-19 (increment-5 post-review). `tests/` parses the static document; no
+  # test in it executes JavaScript, so R34's one script shipped for five
+  # increments with its collapse handler pointed at the wrong element while
+  # every check reported green. The SHA-256 pin proved the bytes had not
+  # changed and said nothing about whether they worked.
+  #
+  # This job is the answer, and it is a job rather than a marker on purpose: a
+  # browser test that CI deselects is this project's third predecessor failure
+  # with a new name ("a live path that could never have passed"). It runs
+  # `tests_browser/` in full, deselects nothing, and installs Chromium so a
+  # missing browser is an error rather than a skip. It is a separate job, not a
+  # matrix arm, because `tests/` must keep passing with only `.[dev]` installed
+  # (R45) and a module-scope `import playwright` there would break that.
+  #
+  # `tests/test_browser_suite_wiring.py` runs in the offline job and fails if
+  # this job stops existing or stops running the tree.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (no [explain] extra — R45 requires `anthropic` absent)
+        run: python -m pip install -e ".[dev]"
+      - name: Install Playwright and Chromium
+        run: |
+          python -m pip install "playwright >= 1.44, < 2"
+          python -m playwright install --with-deps chromium
+      - name: Assert `anthropic` is not importable (R45)
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          if importlib.util.find_spec("anthropic") is not None:
+              sys.exit("anthropic must not be installed in the browser job (R45)")
+          PY
+      - name: Behaviour tests in a real engine (tests_browser/ — nothing deselected)
+        run: |
+          env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL \
+              -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+              -u AWS_PROFILE -u OPENAI_API_KEY -u GH_TOKEN \
+              python -m pytest tests_browser

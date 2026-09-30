@@ -215,8 +215,28 @@ FORBIDDEN_SCRIPT_APIS: tuple[str, ...] = (
 )
 
 #: The one script (R34). A constant, never formatted. It does two things —
-#: filter findings by severity and collapse a section — and both are
-#: ``classList`` toggles over nodes already present in the document.
+#: filter findings by severity and collapse a section — over nodes already
+#: present in the document.
+#:
+#: BUG-19, increment-5 post-review. The collapse handler used to mark
+#: ``event.currentTarget.parentNode``, which is ``div.section-title``, not the
+#: ``<section>``. ``.collapsed > *:not(.section-title)`` then hid *that div's*
+#: children — the ``<h2>`` and the control itself — and left the section's
+#: content on the page, so "hide" deleted the heading, deleted the only way back
+#: and hid nothing. ``closest(".section")`` names the collapse root the
+#: stylesheet's ``:not`` clause assumes; the two halves now agree, and
+#: ``tests_browser/`` executes them together in a real engine rather than
+#: reading either one's bytes.
+#:
+#: The handlers also write ``aria-expanded`` and the control's visible
+#: label. R34's prose says the script performs "only DOM class toggling,
+#: filtering and sorting"; its enforced half is the list of sinks below, and
+#: neither ``setAttribute`` with a literal attribute name and a ``"true"``/
+#: ``"false"`` value nor ``textContent`` with a literal parses markup, reaches
+#: the network or admits an interpolated byte. Both new attribute values are in
+#: :func:`attribute_allowlist`, and a browser test re-checks every attribute in
+#: the *live* DOM after exercising every control, so the guarantee is asserted
+#: after the script has run and not only before.
 #:
 #: It contains no ``//``: R35 forbids a scheme-relative URL anywhere in the
 #: file, and a line comment is indistinguishable from one to a check that reads
@@ -240,6 +260,12 @@ REPORT_SCRIPT = """\
       node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
     });
   }
+  function setExpanded(section, expanded) {
+    var button = section.querySelector(".section-title .toggle");
+    section.classList.toggle("collapsed", !expanded);
+    button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    button.textContent = expanded ? "hide" : "show";
+  }
   each(".filter", function (node) {
     node.addEventListener("click", function (event) {
       applyFilter(event.currentTarget.getAttribute("data-severity"));
@@ -247,7 +273,8 @@ REPORT_SCRIPT = """\
   });
   each(".toggle", function (node) {
     node.addEventListener("click", function (event) {
-      event.currentTarget.parentNode.classList.toggle("collapsed");
+      var section = event.currentTarget.closest(".section");
+      setExpanded(section, section.classList.contains("collapsed"));
     });
   });
   applyFilter("all");
@@ -397,7 +424,14 @@ def sha256_of(text: str) -> str:
 #: ledger. The assertion that matters is not this constant against the constant
 #: above but against the ``<script>`` element **as parsed out of the rendered
 #: document**, which is what proves nothing was interpolated at render time.
-SCRIPT_SHA256 = "17e03dec80b6d0255ef1f1b3db2ec39ce4903a9e742833c0e0a76c03f348dffb"
+#:
+#: Moved once, by the increment-5 post-review, for BUG-19: the collapse
+#: handler's root changed from ``parentNode`` to ``closest(".section")`` and it
+#: now writes the control's state. Previous value:
+#: ``17e03dec80b6d0255ef1f1b3db2ec39ce4903a9e742833c0e0a76c03f348dffb``.
+#: :data:`STYLE_SHA256` did **not** move — the stylesheet was always right; it
+#: was the script that disagreed with it.
+SCRIPT_SHA256 = "caf9f8b6ece9945634499157cc515c9b2b5f4840a6b5f18221c7b879da228ab8"
 
 #: R34: the pinned digest of :data:`REPORT_STYLE`. See :data:`SCRIPT_SHA256`.
 STYLE_SHA256 = "97b30480f4024d9a5bfc298962a7d9e9c51e09081e2d4ae666d9f676d82ffa11"
@@ -506,6 +540,12 @@ def attribute_allowlist(
         "type": frozenset({"button"}),
         "role": frozenset({"img"}),
         "aria-label": frozenset({"execution timeline"}),
+        # BUG-19, increment-5 post-review: the collapse control reports its
+        # state. Both values are literals the script may also write at runtime
+        # (see :data:`REPORT_SCRIPT`), so the allowlist has to admit the pair
+        # rather than the rendered initial value alone — a browser test
+        # re-checks the live DOM against this list after every control is used.
+        "aria-expanded": frozenset({"true", "false"}),
         "data-severity": frozenset(set(SEVERITIES) | {ALL_SEVERITIES}),
         "data-detector": frozenset(DETECTOR_SLUGS),
         "data-agent": frozenset({_n(agent.agent_index) for agent in trace.agents}),
@@ -523,7 +563,7 @@ def _section(w: _Writer, section_id: str, title: str, body: Iterable[str]) -> li
     lines = [
         f'<section class="section" id="{w(section_id, kind=KIND_AUTHORED)}">',
         f'<div class="section-title"><h2>{w(title, kind=KIND_AUTHORED)}</h2>'
-        f'<button class="toggle" type="button">hide</button></div>',
+        f'<button class="toggle" type="button" aria-expanded="true">hide</button></div>',
     ]
     lines.extend(body)
     lines.append("</section>")

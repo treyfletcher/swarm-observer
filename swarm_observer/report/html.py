@@ -642,7 +642,7 @@ def _narrative_section(w: _Writer, narrative: Narrative) -> list[str]:
         )
     for paragraph in narrative.paragraphs:
         body.append(
-            f"<h3>{w(paragraph.title, kind=KIND_AUTHORED)} "
+            f"<h3>{w(paragraph.title, kind=KIND_NARRATOR)} "
             f"({w(paragraph.group, kind=KIND_AUTHORED)})</h3>"
         )
         if paragraph.fallback:

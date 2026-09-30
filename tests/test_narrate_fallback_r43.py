@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from swarm_observer.detect.registry import ALL_DETECTORS
 from swarm_observer.narrate.adapters.anthropic import (
@@ -721,37 +722,74 @@ class TestUntrustedNarratorOutputR43:
         assert document["narrative"]["paragraphs"][0]["reason"] == "timeout"
         assert document["narrative"]["paragraphs"][1]["reason"] is None
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG-16. NarrativeParagraph.title is rendered with the `authored` kind in "
-            "both documents -- no redaction -- but the model constrains it only to "
-            "1..120 characters, while its siblings `group` and `reason` are both "
-            "pattern-constrained to a slug. So a credential in a title reaches "
-            "report.html and report.json verbatim, in both modes. The product path "
-            "never does this (cli.main.build_narrative copies a registry title), which "
-            "is exactly the 'correct for the caller that existed' shape the Modularity "
-            "notes forbid and the i4 review's SpanError.code finding repeated. The fix "
-            "is one `pattern=` on the field, or classifying the title as an identifier."
-        ),
-    )
-    def test_r43_a_title_cannot_carry_a_credential_into_a_report(self, tmp_path: Path) -> None:
-        """R33/R43: every string a renderer writes is classified by its type, not its caller."""
+    @pytest.mark.parametrize("credential", sorted(R51_CREDENTIALS))
+    def test_r43_a_title_cannot_carry_a_credential_into_a_report(
+        self, credential: str, tmp_path: Path
+    ) -> None:
+        """R33/R43 (**BUG-16**, fixed by the increment-5 review): classified by type.
+
+        The tester pinned this ``xfail(strict=True)`` and called it the fifth
+        occurrence of the ``SpanError.code`` family — a field written with the
+        ``authored`` kind because of who happens to call it, when its own type
+        admits anything. Four increments each shipped one of these. This one
+        is closed rather than carried into v1: both renderers now write the
+        title with the ``narrator`` kind.
+
+        Parametrized over the **whole** credential corpus rather than over the
+        one key the finding named, because the previous four fixes were each
+        about the field that was reported.
+
+        Red when: a renderer goes back to claiming a title is its own.
+        """
+        if len(R51_CREDENTIALS[credential]) > 120:
+            # The PEM block is longer than the field's own bound, so this
+            # member is refused by the type before any renderer sees it. Every
+            # credential in the corpus is therefore stopped by one of the two
+            # mechanisms, and the arm says which.
+            with pytest.raises(ValidationError):
+                NarrativeParagraph(
+                    group="overall", title=R51_CREDENTIALS[credential], text="a paragraph"
+                )
+            return
         analysis = analyze_paths(
             _sentinel_paths(tmp_path),
             narrative=Narrative(
                 paragraphs=(
                     NarrativeParagraph(
                         group="overall",
-                        title=R51_CREDENTIALS["aws_key_id"],
+                        title=R51_CREDENTIALS[credential],
                         text="a paragraph",
                     ),
                 ),
                 calls=1,
             ),
         )
-        assert R51_CREDENTIALS["aws_key_id"] not in analysis.html
-        assert R51_CREDENTIALS["aws_key_id"] not in analysis.json
+        assert R51_CREDENTIALS[credential] not in analysis.html
+        assert R51_CREDENTIALS[credential] not in analysis.json
+        assert f"[redacted:{credential}]" in analysis.html
+        assert f"[redacted:{credential}]" in analysis.json
+
+    def test_r43_a_real_title_is_unchanged_by_the_narrator_kind(self, tmp_path: Path) -> None:
+        """R43 (**BUG-16**): the control arm — redaction costs a genuine title nothing.
+
+        ``redact`` is the identity on a registry title, so the fix above moves
+        no byte of any report the product actually produces. Without this arm
+        "the credential is absent" would also be satisfied by a change that
+        blanked every title.
+
+        Red when: the title's class becomes one that blanks, or ``redact``
+        grows a pattern that matches ordinary prose.
+        """
+        title = "Repeated identical tool call"
+        analysis = analyze_paths(
+            _sentinel_paths(tmp_path),
+            narrative=Narrative(
+                paragraphs=(NarrativeParagraph(group="overall", title=title, text="a paragraph"),),
+                calls=1,
+            ),
+        )
+        assert f"<h3>{title} (overall)</h3>" in analysis.html
+        assert json.loads(analysis.json)["narrative"]["paragraphs"][0]["title"] == title
 
 
 class TestNarrativeModelR43:

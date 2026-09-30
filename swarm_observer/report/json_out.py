@@ -377,7 +377,7 @@ def narrative_document(narrative: Narrative, *, previews: bool) -> dict[str, Any
         "paragraphs": [
             {
                 "group": text(paragraph.group, kind=KIND_AUTHORED, previews=previews),
-                "title": text(paragraph.title, kind=KIND_AUTHORED, previews=previews),
+                "title": text(paragraph.title, kind=KIND_NARRATOR, previews=previews),
                 "text": text(paragraph.text, kind=KIND_NARRATOR, previews=previews),
                 "fallback": paragraph.fallback,
                 "reason": optional_text(paragraph.reason, kind=KIND_AUTHORED, previews=previews),

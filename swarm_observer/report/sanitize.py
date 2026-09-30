@@ -69,13 +69,28 @@ The classes, and what each is for:
     increment-4 review's §1.1, expressed as a class rather than as a list.
 
 ``narrator``
-    Increment 5's new untrusted source: a paragraph produced by a language
-    model under ``--explain``. R43 says it "passes through ``redact`` then
-    ``escape_html`` exactly like trace text", and it does. It is **not** blanked
-    under ``--no-previews``, and that is a decision this enum forced into the
-    open rather than a default: R42 guarantees the narrator was never shown a
-    byte of trace free text, so its paragraph cannot contain any, and blanking
-    it would empty the one section ``--explain`` exists to produce. See A-e9.
+    Increment 5's new untrusted source: **every free-form string of the
+    narrative section** — the paragraph a language model produced under
+    ``--explain``, and the heading above it. R43 says the paragraph "passes
+    through ``redact`` then ``escape_html`` exactly like trace text", and it
+    does. It is **not** blanked under ``--no-previews``, and that is a
+    decision this enum forced into the open rather than a default: R42
+    guarantees the narrator was never shown a byte of trace free text, so its
+    paragraph cannot contain any, and blanking it would empty the one section
+    ``--explain`` exists to produce. See A-e9.
+
+    ``NarrativeParagraph.title`` joined this class in the increment-5 review
+    (**BUG-16**). It had been ``authored``, and that was the fifth occurrence
+    of this project's other recurring defect — a field classified as this
+    package's own because of *who happens to call it*, when its own type
+    admits anything. The product path copies a registry title, so nothing
+    leaked; but ``report/`` cannot see ``narrate.client.NARRATION_TITLES``
+    (R44 puts the two on separate branches), so the only claim ``report/`` can
+    make about a title is the one its type supports, which was
+    ``1..120 characters``. Redacting it costs a real title nothing —
+    ``redact`` is the identity on ``Repeated identical tool call`` — and makes
+    the classification a property of the field instead of a property of the
+    caller, which is the Modularity notes' rule and the whole of C1.
 
 The residual gap in the ``identifier`` class is real and unchanged: an
 identifier still carries attacker-chosen bytes under ``--no-previews``, which

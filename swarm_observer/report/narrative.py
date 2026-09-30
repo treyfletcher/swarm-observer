@@ -74,7 +74,13 @@ class NarrativeParagraph(BaseModel):
 
     #: ``"overall"`` or a detector slug. Package-authored.
     group: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    #: The heading shown above the paragraph. Package-authored.
+    #: The heading shown above the paragraph. The product path copies a
+    #: registry title, but this module cannot say so: R44 puts ``narrate`` and
+    #: ``report`` on separate branches, so ``narrate.client.NARRATION_TITLES``
+    #: — the closed vocabulary the *payload* validates against — is not in
+    #: scope here. So the field is not claimed to be authored: both renderers
+    #: write it with the ``narrator`` kind, and it is redacted like the
+    #: paragraph beneath it (**BUG-16**, increment-5 review).
     title: str = Field(min_length=1, max_length=120)
     #: The paragraph itself. **Untrusted**: model-produced unless
     #: :attr:`fallback`, and rendered through the ``narrator`` text kind either

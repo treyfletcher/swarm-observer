@@ -12,3 +12,19 @@
 # test should instead be made to run offline.
 #
 # Format: one exact reason string per line. Blank lines and #-comments ignored.
+#
+# R49 / S35 ledger entry (increment-5 tester, under the owner's provisional
+# ruling). One test carries the `live_narrator` marker:
+#
+#   tests/test_live_narrator.py::test_r41_r43_the_live_narrator_path_end_to_end
+#
+# Why it is deselected rather than skipped: it is the only test that sends a
+# real request to a provider, so CI must not run it (R45: no credentials, no
+# network, no `anthropic`). CI removes it with `-m "not live_narrator"`, which
+# is visible in the session's deselected count and is asserted to be non-zero
+# by tests/test_live_narrator.py::TestLiveNarratorDeselectionR49. A `skipif`
+# would hide the same test behind a reason nobody counts, which R49 forbids.
+# With SWARM_OBSERVER_LIVE_NARRATOR unset the test still runs and still
+# asserts the live path's offline preconditions -- the env gate is a branch
+# inside the test, never a skip. This block is a comment, so the allowlist
+# itself stays empty: a skip remains a session failure.

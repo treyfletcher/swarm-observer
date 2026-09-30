@@ -63,8 +63,23 @@
 # document. R43's fallback semantics, its per-group validation and its
 # byte-identity test are increment 5's and are NOT covered by that citation.
 #
-# Still ledgered: R41 and R42, the narrator client and its payload, which
-# are increment 5's.
-
-R41
-R42
+# Increment 5 (tester): R41 and R42 leave the ledger with tests behind
+# each, and the ledger is now **empty** --
+#   * R41 -- tests/test_narrate_client_r41.py: the Protocol driven with a
+#     stub of the tester's own, the error taxonomy's closed code set, and
+#     the signature property that there is no parameter a provider's text
+#     could reach; plus the fixture client's exhaustion behaviour, whose
+#     AssertionError is what stops an under-scripted test reporting green.
+#   * R42 -- tests/test_narrate_payload_r42.py: every string-valued leaf of
+#     the request tree enumerated from model_fields and attacked, the AC12
+#     sentinel sweep over tests/sentinel_trace.py (whose sentinels are
+#     chosen to be ACCEPTABLE to the payload's own validators, so only the
+#     builder can remove them), and a vocabulary computed from the registry,
+#     the snapshot and the severity enum rather than from the patterns under
+#     test. Read BUG-14 in docs/test-reports/feature-so-i5.md: for
+#     metrics.tool_name the property holds by a filter in summary.py and not
+#     by the type, contrary to MetricEntry's docstring.
+#
+# The ledger is empty. Do not re-add an id to it in order to skip writing a
+# test: the file only shrinks, and an empty debt ledger is the first one
+# this project has had.

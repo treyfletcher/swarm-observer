@@ -24,6 +24,12 @@ Two properties are requirements rather than niceties:
   :func:`_replace_assignment` for the one condition that fixes it. Asserted as a
   property over a generated corpus, not argued.
 
+One pattern is **not** a verbatim transcription, and it is the only one: R33's
+``private_key`` gained an unterminated alternative (S14). R8 truncates a preview
+at 240 code points, so a long key loses the terminator the paired pattern
+requires and reached ``report.json`` intact for the whole of increment 3. See
+:data:`PRIVATE_KEY_UNTERMINATED` for the ordering and the cost.
+
 ``secret_assignment`` is the one entry that keeps part of what it matched: R33
 says "the name is preserved, the value replaced", because ``AWS_SECRET_ACCESS_KEY``
 being present is the useful half of the evidence and its value is the dangerous
@@ -39,16 +45,46 @@ from __future__ import annotations
 
 import re
 
+#: R33's ``private_key`` pattern, transcribed verbatim: a complete PEM block,
+#: header through terminator, matched lazily so two blocks in one string are two
+#: matches rather than one.
+PRIVATE_KEY_PAIRED = r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+
+#: **S14.** The same header with **no** terminator, running to the end of the
+#: string. R8 caps a preview at 240 code points and R33's paired pattern needs
+#: both markers, so a private key longer than the remaining budget loses its
+#: ``-----END … KEY-----`` and the paired pattern cannot match it: before this,
+#: ``report.json`` for ``hostile.jsonl`` carried
+#: ``-----BEGIN RSA PRIVATE KEY----- MIIBOgIBAAJBAK5f000…`` verbatim, and R51
+#: promises that block "appears nowhere".
+#:
+#: Ordered **after** the paired form inside one alternation, which is the
+#: increment-3 review's ruling on S14 expressed as a regex rather than as a
+#: second table row: Python's ``|`` tries the left branch first at each starting
+#: position, so a *complete* block still redacts as one unit and only a block
+#: with no terminator reaches this branch. The alternative — a second
+#: ``private_key`` entry in the table — was rejected because it makes
+#: ``dict(REDACTION_PATTERNS)`` lossy and :data:`REDACTION_LABELS` carry a
+#: duplicate, i.e. it breaks the table's own shape to add a row to it.
+#:
+#: The cost, stated rather than hidden: a string that merely *mentions* a PEM
+#: header loses everything after it. Redaction is not reversible and a courtesy
+#: that over-redacts a preview is strictly better than one that ships a key.
+#: The fix is deliberately not "lengthen previews" — the same hole reopens at
+#: the next cap, which is the coder-and-reviewer consensus recorded in S14.
+PRIVATE_KEY_UNTERMINATED = r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*"
+
 #: R33: the ordered pattern table. Each entry is ``(label, compiled pattern)``
 #: and the label is what appears in the replacement marker.
 #:
-#: The patterns are transcribed verbatim from R33. Where a pattern below looks
-#: over-broad or under-broad, that is the requirement's call and changing it
-#: here would put the implementation and the spec out of step silently.
+#: The patterns are transcribed verbatim from R33, with the single documented
+#: exception of ``private_key``'s S14 alternation above. Where a pattern below
+#: looks over-broad or under-broad, that is the requirement's call and changing
+#: it here would put the implementation and the spec out of step silently.
 REDACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "private_key",
-        re.compile(r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"),
+        re.compile(f"{PRIVATE_KEY_PAIRED}|{PRIVATE_KEY_UNTERMINATED}"),
     ),
     ("aws_key_id", re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}\b")),
     ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b")),
@@ -151,6 +187,8 @@ def redact(text: str) -> str:
 
 __all__ = [
     "NAME_PRESERVING_LABEL",
+    "PRIVATE_KEY_PAIRED",
+    "PRIVATE_KEY_UNTERMINATED",
     "REDACTION_LABELS",
     "REDACTION_PATTERNS",
     "marker",

@@ -28,6 +28,7 @@ import pytest
 
 from swarm_observer.report.redact import (
     NAME_PRESERVING_LABEL,
+    PRIVATE_KEY_PAIRED,
     REDACTION_LABELS,
     REDACTION_PATTERNS,
     marker,
@@ -260,8 +261,15 @@ class TestPatternTableR33:
         ("label", "expected"),
         [
             (
+                # S14 (increment 4): R33's paired form, then the unterminated
+                # alternative the review ruled must be added before the HTML
+                # renderer ships. The left branch is still R33's text verbatim
+                # and is pinned as such by the case below, so the requirement's
+                # own wording has not stopped being asserted — the alternation
+                # is the whole pattern and both halves are spelled out here.
                 "private_key",
-                r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----",
+                r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+                r"|-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*",
             ),
             ("aws_key_id", r"\b(?:AKIA|ASIA|AIDA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}\b"),
             ("anthropic_key", r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b"),
@@ -281,6 +289,20 @@ class TestPatternTableR33:
         """R33: the pattern source, not merely its behaviour on one example."""
         table = dict(REDACTION_PATTERNS)
         assert table[label].pattern == expected
+
+    def test_r33_the_paired_private_key_half_is_still_the_requirements_text(self) -> None:
+        """R33/S14: the branch R33 pins verbatim is still pinned verbatim.
+
+        The S14 fix adds an alternative; it must not have *edited* the form the
+        requirement wrote down, because a complete PEM block redacting as one
+        unit is what the lazy paired branch buys and what the review's ruling
+        required be preserved.
+        """
+        assert (
+            PRIVATE_KEY_PAIRED
+            == r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+        )
+        assert dict(REDACTION_PATTERNS)["private_key"].pattern.startswith(PRIVATE_KEY_PAIRED + "|")
 
     def test_r33_the_two_case_insensitive_patterns_carry_their_flag(self) -> None:
         """R33: ``bearer`` and ``secret_assignment`` are ``(?i)`` in the table."""

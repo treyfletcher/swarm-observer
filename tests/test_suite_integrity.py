@@ -13,6 +13,7 @@ canary is a visible debt rather than an absence nobody notices.
 
 from __future__ import annotations
 
+import ast
 import json
 import tomllib
 import unicodedata
@@ -61,7 +62,32 @@ REQUIRED_CANARIES: dict[str, int] = {
     # way and this is where it is recorded.
 }
 
-CURRENT_INCREMENT = 3
+#: R50's seven required canaries, typed from the requirement rather than read
+#: from :data:`REQUIRED_CANARIES`. The ledger may hold more (the increment-2
+#: review added ``metrics_redaction_dropped``); it may not hold fewer.
+R50_REQUIRED_BY_NAME: frozenset[str] = frozenset(
+    {
+        "determinism_harness",
+        "golden_byte_flip",
+        "injection_probe_identity_escape",
+        "attribute_allowlist_injection",
+        "offline_socket_permitted",
+        "redaction_pattern_removed",
+        "detector_coverage_dropped",
+    }
+)
+
+#: Increment 4 (tester). The four canaries this increment owed —
+#: ``injection_probe_identity_escape``, ``attribute_allowlist_injection``,
+#: ``offline_socket_permitted`` and ``metrics_redaction_dropped`` — are checked
+#: in, so the ledger is bumped in the same commit as they arrive, the way
+#: ``redaction_pattern_removed`` was moved in increment 3. With this bump every
+#: canary R50 names exists and the ledger's outstanding set is **empty**, which
+#: is why ``test_r50_later_canaries_are_ledgered_not_forgotten`` was replaced by
+#: ``test_r50_every_canary_the_requirement_names_is_checked_in``: the old test
+#: asserted the debt was non-empty, and an assertion that a completed ledger
+#: must stay incomplete is not a check anybody should keep.
+CURRENT_INCREMENT = 4
 
 
 def all_test_modules() -> list[str]:
@@ -160,15 +186,40 @@ class TestCanaryLedgerR50:
             path = canaries / f"test_canary_{name}.py"
             assert path.is_file(), f"required canary missing: {path.relative_to(REPO)}"
 
-    def test_r50_later_canaries_are_ledgered_not_forgotten(self) -> None:
-        """R50: the debt is written down with the increment that clears it."""
+    def test_r50_every_canary_the_requirement_names_is_checked_in(self) -> None:
+        """R50: all seven named canaries exist, and the list is the requirement's.
+
+        Replaces ``test_r50_later_canaries_are_ledgered_not_forgotten``, which
+        asserted the outstanding set was **non-empty** — correct while a debt
+        remained and wrong the moment it was paid. Increment 4 delivered the last
+        four, so the check that survives is the one that can still fail: every
+        name R50 lists is in the ledger and has a file.
+
+        Red when: a canary is deleted, renamed, or dropped from the ledger.
+        """
+        canaries = TESTS_DIR / "canaries"
+        assert set(REQUIRED_CANARIES) >= R50_REQUIRED_BY_NAME
+        for name in sorted(R50_REQUIRED_BY_NAME):
+            path = canaries / f"test_canary_{name}.py"
+            assert path.is_file(), f"R50 names this canary and it is missing: {name}"
+            assert REQUIRED_CANARIES[name] <= CURRENT_INCREMENT, name
+
+    def test_r50_a_later_increments_debt_would_still_be_ledgered(self) -> None:
+        """R50: the ledger's outstanding set is a live mechanism, not a dead field.
+
+        The debt is empty today. The mechanism that reports one is asserted
+        against a probe rather than against the real ledger, so it keeps working
+        for increment 5 and does not require a debt to exist in order to pass.
+
+        Red when: the outstanding computation is deleted along with the debt it
+        used to describe.
+        """
+        probe = {**REQUIRED_CANARIES, "narrator_fallback_dropped": 5}
         outstanding = {
-            name: increment
-            for name, increment in REQUIRED_CANARIES.items()
-            if increment > CURRENT_INCREMENT
+            name: increment for name, increment in probe.items() if increment > CURRENT_INCREMENT
         }
-        assert outstanding, "the canary ledger is empty; R50 lists seven required canaries"
-        assert all(increment <= 5 for increment in outstanding.values())
+        assert outstanding == {"narrator_fallback_dropped": 5}
+        assert all(increment <= 5 for increment in REQUIRED_CANARIES.values())
 
     def test_r50_every_canary_module_proves_a_failure(self) -> None:
         """R50: a canary must assert its guard *raises*, whether or not it is required.
@@ -379,6 +430,15 @@ class TestMutationLedgerR49:
             "swarm_observer/cli/main.py",
             "swarm_observer/detect/base.py",
             "swarm_observer/detect/registry.py",
+            # Increment 4 (tester). The coder's write-up named this list as a
+            # gap it would not close unilaterally, because "what a sweep must
+            # cover" is a decision rather than a transcription. These four are
+            # the modules increment 4 created, and every one of them is on the
+            # path a trace byte takes to a rendered document.
+            "swarm_observer/report/escape.py",
+            "swarm_observer/report/sanitize.py",
+            "swarm_observer/report/timeline.py",
+            "swarm_observer/report/html.py",
         ):
             assert required in modules, required
             mine = [item for item in self.live_mutations() if item["module"] == required]
@@ -398,3 +458,147 @@ def test_r49_fixture_corpus_directory_exists() -> None:
     fixture = Path(TESTS_DIR / "fixtures" / "mapper" / "stream_fragments.jsonl")
     assert fixture.is_file()
     assert fixture.read_text(encoding="utf-8").strip(), "the fixture is empty"
+
+
+def _is_truthy_literal(node: ast.expr) -> bool:
+    """True when ``node`` is a literal that is always truthy.
+
+    ``assert True``, ``assert 1``, ``assert "x"`` and ``assert [0]`` are all
+    assertions that cannot fail. ``assert 0`` and ``assert ()`` can, so they are
+    not flagged — a deliberately failing literal is a different mistake and one
+    a run finds immediately.
+    """
+    if isinstance(node, ast.Constant):
+        return bool(node.value)
+    if isinstance(node, ast.List | ast.Tuple | ast.Set):
+        return bool(node.elts)
+    if isinstance(node, ast.Dict):
+        return bool(node.keys)
+    return False
+
+
+def tautological_assertions(source: str) -> list[tuple[int, str]]:
+    """Every ``assert`` in ``source`` that no input can make fail (R49).
+
+    Two shapes, both observed in this repository:
+
+    * ``assert <truthy literal>`` — the direct form;
+    * ``assert X or True`` — the form **BUG-11** took, where a red assertion
+      was made green by disjoining a truthy literal onto it. ``or`` is the only
+      connective that does this; ``and`` narrows rather than widens, so it is
+      not flagged.
+
+    Factored out of the test below so the check itself can be driven, which is
+    the rule this module exists to enforce: a guard whose logic only ever runs
+    inside a test is a guard nobody has watched fail.
+    """
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if _is_truthy_literal(test):
+            found.append((node.lineno, "assert <truthy literal>"))
+        elif (
+            isinstance(test, ast.BoolOp)
+            and isinstance(test.op, ast.Or)
+            and any(_is_truthy_literal(value) for value in test.values)
+        ):
+            found.append((node.lineno, "assert ... or <truthy literal>"))
+    return found
+
+
+class TestNoAssertionIsStructurallyUnableToFailR49:
+    """R49: this project's signature defect, as a check rather than as a habit.
+
+    ``tests/test_reader_and_limits.py`` carried
+    ``assert digest_id("a|b") != digest_id("a", "b") or True`` for three
+    increments. It was green every run, it documented nothing, and the property
+    it named was *false* — the ``or True`` is what a red test was made green
+    with. It is the ninth recorded instance of "a check reporting green while
+    structurally unable to fail", and it was sitting inside the suite whose
+    stated purpose is to catch that class.
+
+    The increment-4 tester found it by grepping for ``or True`` after writing
+    one, removed it, and left the question of whether the grep belongs in CI to
+    this review. **It does.** A one-off grep is exactly the mitigation that
+    produced instances two through nine: a class of defect found by hand, fixed
+    once, and left unguarded. It costs an AST walk over the test tree, it names
+    the file and line, and — unlike a grep — it cannot be confused by the string
+    ``or True`` inside a docstring, a comment or test data, which this module's
+    own prose contains.
+
+    What it does **not** catch is the subtler members of the family: a fixture
+    with no case that could trip the check, a sweep over an empty array, a
+    ledger that can be widened. Those need a non-vacuous arm per check and no
+    scanner can supply one. This closes the one shape a scanner *can* see.
+    """
+
+    def test_r49_no_test_module_contains_an_assertion_that_cannot_fail(self) -> None:
+        """R49: the scan, over every module under ``tests/``.
+
+        Red when: an assertion is disjoined with a truthy literal, or asserts
+        one outright. Both are ways of writing down a property without checking
+        it, which is worse than not writing it down — a reader believes it.
+        """
+        offenders: list[str] = []
+        for path in sorted(TESTS_DIR.rglob("*.py")):
+            for line, shape in tautological_assertions(path.read_text(encoding="utf-8")):
+                offenders.append(f"{path.relative_to(TESTS_DIR.parent).as_posix()}:{line}: {shape}")
+        assert not offenders, (
+            "assertion(s) that no input can make fail:\n  "
+            + "\n  ".join(offenders)
+            + "\nAssert the property in the direction it holds, or delete it."
+        )
+
+    def test_r49_the_scan_has_modules_and_assertions_to_scan(self) -> None:
+        """R49: the premise — "no offenders" must not mean "nothing was read".
+
+        A scanner that walked zero files, or files with zero assertions, would
+        report clean forever. This is the arm that the check above is about
+        something.
+        """
+        modules = sorted(TESTS_DIR.rglob("*.py"))
+        assert len(modules) > 30, len(modules)
+        total = sum(
+            isinstance(node, ast.Assert)
+            for path in modules
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        )
+        assert total > 1_000, total
+
+    def test_r49_the_scan_catches_bug11s_exact_shape(self) -> None:
+        """R49: driven against the line that was actually shipped.
+
+        The inherited text, verbatim, plus the direct forms. Red when: the
+        predicate is narrowed — which is what would happen the first time
+        somebody wants an assertion the scan refuses.
+        """
+        bug11 = 'assert digest_id("a|b") != digest_id("a", "b") or True  # documents the joiner\n'
+        assert tautological_assertions(bug11) == [(1, "assert ... or <truthy literal>")]
+        assert tautological_assertions("assert True\n") == [(1, "assert <truthy literal>")]
+        assert tautological_assertions("assert 1\n") == [(1, "assert <truthy literal>")]
+        assert tautological_assertions('assert x or "yes"\n') == [
+            (1, "assert ... or <truthy literal>")
+        ]
+        assert tautological_assertions("assert x or [1]\n") == [
+            (1, "assert ... or <truthy literal>")
+        ]
+
+    def test_r49_the_scan_does_not_flag_an_assertion_that_can_fail(self) -> None:
+        """R49: the other half — a scanner that flagged everything is no scanner.
+
+        ``and``-ing a truthy literal narrows nothing away, ``or 0`` cannot make
+        a false assertion true, and a message argument is not the test. Each of
+        these is a false positive that would get the scan deleted.
+        """
+        for source in (
+            "assert x == y\n",
+            "assert x and True\n",
+            "assert x or 0\n",
+            "assert x or []\n",
+            'assert x, "or True"\n',
+            "assert x or y\n",
+            "assert not x\n",
+        ):
+            assert tautological_assertions(source) == [], source

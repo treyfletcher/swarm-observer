@@ -39,13 +39,32 @@
 # citation, not coverage: R39's other four clauses (exit 0, exit 1 via
 # --fail-on, exit 2 fail-closed, and --explain never changing the code) are the
 # increment-3 tester's, and so are R26-R31, R36's JSON half and R38/R40.
+#
+# Increment 4 (tester): R32, R34, R35, R37, R46 and R51 leave the ledger,
+# with tests rather than citations behind each --
+#   * R32 -- tests/test_report_escape_r32.py (the table, AC4's single pass,
+#     the non-printable rule, and S24's interpreter tie asserted rather than
+#     argued).
+#   * R34/R35 -- tests/test_report_html_r34_r35_r36.py and
+#     tests/test_injection_probe_r51.py, both against the parsed document.
+#   * R37 -- tests/test_report_timeline_r37.py, geometry and the A-d7 clamp.
+#   * R46 -- tests/test_offline_determinism_r46_r47.py, in a child process,
+#     with two control arms and its R50 canary.
+#   * R51 -- tests/test_injection_probe_r51.py. Read BUG-8 first: the
+#     checked-in hostile.jsonl does not load every field R51 names, so the
+#     probe also runs over tests/hostile_corpus.py's extended trace.
+# R36's HTML half, R33's HTML boundary and R47's report.html bytes are
+# covered too; those ids left the ledger in increment 3 for their JSON
+# halves only, and the comment above says so.
+#
+# R43 also leaves the ledger, for one clause only: increment 4's HTML
+# renderer must NOT emit <section id="narrative"> with --explain off, and
+# tests/test_report_html_r34_r35_r36.py asserts that against the parsed
+# document. R43's fallback semantics, its per-group validation and its
+# byte-identity test are increment 5's and are NOT covered by that citation.
+#
+# Still ledgered: R41 and R42, the narrator client and its payload, which
+# are increment 5's.
 
-R32
-R34
-R35
-R37
 R41
 R42
-R43
-R46
-R51

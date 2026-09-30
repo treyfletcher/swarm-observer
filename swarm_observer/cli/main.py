@@ -22,11 +22,10 @@ Three rules it exists to keep:
   rendered in full, in memory, before anything is staged; a failure anywhere
   leaves a pre-existing report untouched rather than half-overwritten.
 
-Increment 3 wires ``analyze`` for the JSON report. ``--out`` (HTML) and
-``--explain`` are declared so ``--help`` shows R38's whole surface, and both
-are refused with a usage error until increments 4 and 5 build what they name:
-accepting a flag that silently does nothing is how a missing feature becomes a
-wrong report.
+Increment 4 wires ``analyze`` for both reports. ``--explain`` is still declared
+so ``--help`` shows R38's whole surface, and is still refused with a usage error
+until increment 5 builds it: accepting a flag that silently does nothing is how
+a missing feature becomes a wrong report.
 """
 
 from __future__ import annotations
@@ -53,7 +52,9 @@ from swarm_observer.ingest.reader import atomic_write_texts
 from swarm_observer.ingest.registry import DEFAULT_ADAPTER, adapter_slugs, build_adapter
 from swarm_observer.ingest.source import IngestLimits, TraceError
 from swarm_observer.model.trace import schema_document
-from swarm_observer.report.json_out import RenderOptions, render_json, severity_counts
+from swarm_observer.report.html import render_html
+from swarm_observer.report.json_out import render_json, severity_counts
+from swarm_observer.report.sanitize import RenderOptions
 
 #: R39: the pinned exit codes.
 EXIT_OK = 0
@@ -79,8 +80,11 @@ JSONL_SUFFIX = ".jsonl"
 #: Flags R38 declares whose implementation lands in a later increment. Naming
 #: them here — rather than omitting them — keeps ``--help`` honest about the
 #: v1 surface while making a run that depends on them fail loudly.
+#:
+#: Increment 4 removed ``out``: the HTML renderer exists, and a flag that is
+#: implemented and still refused is the mirror image of one that is accepted and
+#: does nothing.
 _DEFERRED_FLAGS = {
-    "out": ("--out", "the HTML report arrives with increment 4; use --json for now"),
     "explain": ("--explain", "the narrator arrives with increment 5"),
 }
 
@@ -149,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument(
         "--out",
         metavar="<report.html>",
-        help="write the self-contained HTML report here (increment 4)",
+        help="write the self-contained HTML report here",
     )
     analyze.add_argument(
         "--json",
@@ -387,14 +391,29 @@ def summary_line(written: Sequence[Path], findings: Sequence[Finding]) -> str:
 
 
 def analyze(args: argparse.Namespace, out: TextIO) -> int:
-    """R38-R40: ingest → detect → cost → JSON, then one line and an exit code."""
+    """R38-R40: ingest → detect → cost → render, then one line and an exit code.
+
+    R38 writes ``--out`` as required and ``--json`` as optional. What is
+    enforced here is **at least one of the two**, which is S18's ruling: a CI
+    job that gates on ``--fail-on`` and never opens a browser is a legitimate
+    invocation and should not be made to write an artefact nobody reads. A run
+    with neither flag is still a usage error, because a run that reports success
+    without writing the file it was asked for is the failure A-c10 is about.
+    """
     for attribute, (flag, reason) in sorted(_DEFERRED_FLAGS.items()):
         if getattr(args, attribute):
             raise UsageError(f"{PROGRAM}: error: {flag} is not available yet: {reason}")
-    if args.json_path is None:
-        raise UsageError(f"{PROGRAM}: error: --json is required (--out arrives with increment 4)")
+    if args.out is None and args.json_path is None:
+        raise UsageError(f"{PROGRAM}: error: one of --out or --json is required")
 
-    json_path = check_output_path(args.json_path)
+    # Both destinations are validated before anything is read, so a mistyped
+    # path costs a usage error rather than a full ingest followed by a write
+    # failure — and a run that can only write half of what it was asked for
+    # writes neither.
+    html_path = None if args.out is None else check_output_path(args.out)
+    json_path = None if args.json_path is None else check_output_path(args.json_path)
+    if html_path is not None and json_path is not None and html_path == json_path:
+        raise UsageError(f"{PROGRAM}: error: --out and --json name the same path")
     limits = build_limits(args)
     config = build_config(args)
 
@@ -415,19 +434,37 @@ def analyze(args: argparse.Namespace, out: TextIO) -> int:
         for finding in detected.findings
     )
 
-    document = render_json(
-        trace=trace,
-        findings=findings,
-        cost=cost,
-        tool_version=__version__,
-        options=RenderOptions(
-            previews=not args.no_previews,
-            blocked_gap_seconds=config.blocked_gap_seconds,
-            detectors=selected_slugs(config),
-        ),
+    options = RenderOptions(
+        previews=not args.no_previews,
+        blocked_gap_seconds=config.blocked_gap_seconds,
+        detectors=selected_slugs(config),
     )
-    atomic_write_texts({json_path: document})
-    out.write(summary_line([json_path], findings))
+    # Both documents are rendered in full, in memory, before either is staged
+    # (R11): a renderer that raised halfway through would otherwise leave one
+    # report written and the other not, which is a partial result with a
+    # successful exit code.
+    documents: dict[Path, str] = {}
+    if html_path is not None:
+        documents[html_path] = render_html(
+            trace=trace,
+            findings=findings,
+            cost=cost,
+            tool_version=__version__,
+            options=options,
+        )
+    if json_path is not None:
+        documents[json_path] = render_json(
+            trace=trace,
+            findings=findings,
+            cost=cost,
+            tool_version=__version__,
+            options=options,
+        )
+    atomic_write_texts(documents)
+    # R40: the paths in the order R38 lists the flags, not in dict order — the
+    # stdout line is a function of the flags and nothing else (R47).
+    written = [path for path in (html_path, json_path) if path is not None]
+    out.write(summary_line(written, findings))
     return exit_code_for(findings, args.fail_on)
 
 

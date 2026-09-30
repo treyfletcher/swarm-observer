@@ -153,7 +153,19 @@ def sentinel_trace(token: str = SENTINEL) -> Trace:
     error_span = builder.model_call(
         agent_id=agent,
         model=f"{token}-ERRORMODEL",
-        error=SpanError(code="api_error", detail=f"{token}-ERRORDETAIL"),
+        # ``code`` carries the token too, and that is a review fix rather than a
+        # tidy-up. It used to be the literal ``"api_error"`` — a package-authored
+        # constant in the one field of this trace that was leaking — so the
+        # sweep below asserted "no credential reaches the document" about a
+        # field the credential could never have entered. R12 builds
+        # ``SpanError.code`` from the record's own ``error`` value with
+        # ``ingest.text.slug``, exactly as R4 builds a ``ParseWarning.detail``
+        # from the record's unknown ``type``, and its alphabet admits
+        # ``AKIAIOSFODNN7EXAMPLE`` verbatim. A sweep whose fixture cannot carry
+        # the payload into a field is that field's check reporting green while
+        # structurally unable to fail. See §1.1 of
+        # docs/reviews/feature-so-i4.md.
+        error=SpanError(code=f"{token}-ERRORCODE", detail=f"{token}-ERRORDETAIL"),
     )
     builder.replace(error_span, stop_reason=f"{token}-STOPREASON")
     tool = builder.tool_call(
@@ -275,6 +287,16 @@ LEAKING_PATHS: frozenset[str] = frozenset(
         # finding_id the same document prints).
         "findings[].agent_ids[]",
         "findings[].metrics.tool_name",
+        # Added by the increment-4 review, and the entry is a *fix* landing,
+        # not a regression: `spans[].error.code` did not appear here before
+        # because `sentinel_trace` pinned it to the literal `"api_error"`, so
+        # no sentinel could reach it and the sweep was blind to the field. It is
+        # now loaded, it is now redacted in both modes (R12 builds it from the
+        # record's own `error` value, exactly as R4 builds a warning detail),
+        # and it joins the identifier class for the same reason
+        # `warnings[].detail` is in it: blanking it would merge distinct API
+        # errors in the one field that says what went wrong.
+        "spans[].error.code",
         # A source file's basename is path-derived rather than trace-derived, and
         # R47 already restricts it to a basename. Review routed it through the
         # redactor too (the tester's S21); it is not blanked, because a report
@@ -289,7 +311,14 @@ LEAKING_PATHS: frozenset[str] = frozenset(
 #: line now costs two edits in two places with this comment between them, which
 #: is the same friction A11 puts on ``collection_floor.json`` and for the same
 #: reason. It may be **lowered** freely; raising it is a reviewer's call.
-LEAK_LEDGER_SIZE = 10
+#:
+#: Raised 10 → 11 by the increment-4 review, deliberately and with the reason
+#: recorded: ``spans[].error.code`` joined the ledger because the fixture was
+#: fixed to load it, not because a new field started leaking. The distinction
+#: matters — a ledger that grows because a blind spot was closed is the ledger
+#: working, and a ledger that grows because a guard was skipped is not — so it
+#: is written next to the number rather than in a commit message.
+LEAK_LEDGER_SIZE = 11
 
 
 class TestJsonEmissionR36:
@@ -619,30 +648,42 @@ class TestRedactionAtTheBoundaryR33:
         assert marker("aws_key_id") in text
         assert marker("anthropic_key") in text
 
-    def test_r33_a_pem_block_whose_terminator_was_truncated_is_not_redacted(self) -> None:
-        """R8 vs R33: the hole the coder flagged, pinned as it behaves today.
+    def test_r33_a_pem_block_whose_terminator_was_truncated_is_redacted(self) -> None:
+        """R8 vs R33 — **S14, closed in increment 4.** This is the place it is recorded.
 
         R8 caps a preview at 240 code points and R33's ``private_key`` pattern
-        needs both ``-----BEGIN … KEY-----`` and ``-----END … KEY-----``. A key
-        longer than the remaining budget loses its terminator, so the pattern
-        cannot match and the header plus the first ~60 characters of key
-        material reach the report.
+        needed both ``-----BEGIN … KEY-----`` and ``-----END … KEY-----``. A key
+        longer than the remaining budget lost its terminator, so the pattern
+        could not match and the header plus the first ~60 characters of key
+        material reached the report. The increment-3 tester pinned that
+        behaviour here with the note "when R33 gains an unterminated
+        alternative, this test fails and is the place to record it"; the
+        increment-3 review ruled the amendment must land **before** the HTML
+        renderer ships, because increment 4 is when those bytes reach a browser.
 
-        This is pinned rather than xfailed because the fix is an amendment to
-        R33's table, which the requirement pins verbatim: the implementation is
-        a faithful transcription and changing it here would put code and spec
-        out of step silently. When R33 gains an unterminated alternative, this
-        test fails and is the place to record it.
+        The assertion is therefore inverted, in place, rather than deleted.
+        Three arms, because "the header is absent" is satisfied perfectly by a
+        renderer that emits nothing:
+
+        1. the truncated block is gone and its marker is present;
+        2. a **complete** block still redacts as one unit, which is what the
+           paired branch running first buys;
+        3. the hostile fixture still renders text at all.
         """
         path = next(p for p in fixture_paths() if p.stem == "hostile")
         text = render_of(load_trace(path))
-        assert "-----BEGIN RSA PRIVATE KEY-----" in text
-        assert "-----END RSA PRIVATE KEY-----" not in text
-        assert marker("private_key") not in text
-        # A *complete* block, which fits inside the preview budget, does redact —
-        # so the miss above is about the truncation and not about the pattern.
+        assert "-----BEGIN RSA PRIVATE KEY-----" not in text
+        assert "PRIVATE KEY" not in text
+        assert marker("private_key") in text
+        # A *complete* block redacts to exactly one marker: the S14 alternative
+        # is ordered after the paired form, so it never splits a whole block.
         complete = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
         assert free_text(complete, previews=True) == marker("private_key")
+        # The control arm: the document is not empty, and the *other* credential
+        # shapes in the same fixture still redact, so this is not a report that
+        # simply stopped rendering previews.
+        assert marker("aws_key_id") in text
+        assert len(text) > 1000
 
     def test_r33_the_truncated_pem_is_absent_under_no_previews(self) -> None:
         """R38: the flag is what actually removes it, which is the point of A10."""
@@ -1135,13 +1176,50 @@ class TestDocumentPartsR36:
             assert rendered["tool_result_status"] == "ok"
             assert rendered["error"] is None
 
-    def test_r36_a_span_error_renders_its_enumerated_code_and_redacted_detail(self) -> None:
-        """R2/R33: the code is ours, the detail is the trace's."""
+    def test_r36_a_span_error_renders_a_redacted_code_and_a_redacted_detail(self) -> None:
+        """R2/R12/R33: **both** halves of ``SpanError`` are the trace's.
+
+        This test used to read ``assert rendered["error"]["code"] == "api_error"``
+        under the docstring "the code is ours, the detail is the trace's", and
+        that sentence was the whole defect. R12 builds the code from the
+        record's own ``error`` field through ``ingest.text.slug`` — the same
+        construction R4 uses for a ``ParseWarning.detail``, which has been
+        redacted since increment 3 — so it is *not* ours. Rewritten by review
+        rather than deleted, because the belief it encoded is what let a
+        credential through, and a reader of this file should see it corrected
+        rather than absent.
+
+        The two halves differ in one way, and it is the S16 partition: the
+        detail is free text and is **blanked** under ``--no-previews``; the code
+        is an aggregation key and is **redacted in both modes**, because
+        blanking it would merge distinct API errors in the one field that says
+        what went wrong.
+        """
         trace = sentinel_trace()
         rendered = span_document(trace.spans[1])
-        assert rendered["error"]["code"] == "api_error"
+        assert SENTINEL in rendered["error"]["code"]
         assert SENTINEL in rendered["error"]["detail"]
-        assert span_document(trace.spans[1], previews=False)["error"]["detail"] == ""
+        blanked = span_document(trace.spans[1], previews=False)
+        assert blanked["error"]["detail"] == ""
+        assert SENTINEL in blanked["error"]["code"]
+
+    def test_r33_a_credential_shaped_span_error_code_is_redacted_in_both_modes(self) -> None:
+        """R12/R33/R51: the arm the old assertion could not have.
+
+        ``SpanError.code``'s alphabet (``^[A-Za-z0-9_.:\\-]{1,40}$``) stops
+        markup and admits ``AKIAIOSFODNN7EXAMPLE`` verbatim, so "it is an
+        enumerated slug" is a shape claim and not a secret claim — which is the
+        S13 ruling, stated about ``tool_name``, applied to the field that
+        inherited the same mistake.
+
+        Red when: ``json_out`` renders ``span.error.code`` without
+        :func:`identifier`, which is what it did until review.
+        """
+        trace = sentinel_trace(CREDENTIAL)
+        for previews in (True, False):
+            rendered = span_document(trace.spans[1], previews=previews)
+            assert CREDENTIAL not in rendered["error"]["code"]
+            assert marker("aws_key_id") in rendered["error"]["code"]
 
     def test_r36_agent_document_carries_the_span_seqs_as_a_list(self) -> None:
         """R2/R36: tuples become JSON arrays."""

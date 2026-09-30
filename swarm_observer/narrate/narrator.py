@@ -54,6 +54,7 @@ from swarm_observer.detect.base import Finding
 from swarm_observer.narrate.client import (
     MAX_PARAGRAPH_CHARS,
     OVERALL_GROUP,
+    RESERVED_PARAGRAPH_PREFIX,
     GroupSummary,
     NarrationRequest,
     NarratorClient,
@@ -114,12 +115,29 @@ def has_control_characters(text: str) -> bool:
 
 
 def validate_paragraph(text: str) -> str:
-    """R43's three checks, in order, returning the normalized paragraph.
+    """R43's three checks plus the reserved-token check, returning the normalized text.
 
     Raises :class:`NarratorResponseError` with the code naming which check
     failed, so a fallback can say *why* it fell back — in ``report.json``,
     where a machine consumer can see it, and in the HTML title attribute of
     nothing at all, because R34 forbids putting it in an attribute.
+
+    R43's own three come first and in their original order, because a
+    paragraph that breaks several is reported by the first one it breaks and
+    that ordering is pinned. The fourth is the increment-5 review's
+    (**BUG-15**): R43's *visible* fallback marker is a string a narrator could
+    write, and the Security considerations' "untrusted model output" clause
+    means a marker an attacker-influenced source can author does not mark
+    anything. Rejecting the token is the correct outcome and not merely a safe
+    one — the paragraph falls back, so the reader sees a deterministic summary
+    that genuinely is one, and R39's exit code is untouched because a
+    rejection here is just another per-group fallback.
+
+    Containment rather than a prefix test, and case-insensitive: the marker's
+    whole function is visual, and a reader skimming a paragraph for "did the
+    tool write this?" is not checking column one. The literal includes its
+    colon, so the phrase is narrow enough that a narrator writing about a run
+    has no reason to produce it.
     """
     normalized = normalize_paragraph(text)
     if not normalized:
@@ -128,6 +146,8 @@ def validate_paragraph(text: str) -> str:
         raise NarratorResponseError("response_control_characters")
     if len(normalized) > MAX_PARAGRAPH_CHARS:
         raise NarratorResponseError("response_too_long")
+    if RESERVED_PARAGRAPH_PREFIX.casefold() in normalized.casefold():
+        raise NarratorResponseError("response_forged_marker")
     return normalized
 
 

@@ -122,6 +122,25 @@ SNAPSHOT_VERSION_PATTERN = r"^[A-Za-z0-9._\-]{1,64}$"
 #: R43: the longest paragraph a narrator may return, after normalization.
 MAX_PARAGRAPH_CHARS = 800
 
+#: R43's **visible** fallback marker, as a token a narrator may not write
+#: (**BUG-15**, increment-5 review).
+#:
+#: R43 pairs two markers on a deterministic paragraph: the DOM class
+#: ``narrative-fallback``, which only the renderer can emit, and this string,
+#: which a reader actually sees. Nothing stopped a narrator's own paragraph
+#: from containing it, so an untrusted source could write the one marker that
+#: means "swarm-observer wrote this, not the model" — the S32 family, where a
+#: marker this package authors is also authorable by something else.
+#:
+#: The literal is **duplicated** from ``report.narrative.FALLBACK_PREFIX``
+#: rather than imported, because R44 puts ``narrate`` and ``report`` on
+#: separate branches and neither may import the other. The duplication is
+#: bound by ``test_r43_the_reserved_token_is_the_renderers_own_marker``, which
+#: is the same discipline ``tests/pipeline.py`` applies to ``selected_slugs``
+#: and ``tests/sentinel_trace.py`` to the CLI's cost extraction: a copy is
+#: honest only when something asserts the equality.
+RESERVED_PARAGRAPH_PREFIX = "Deterministic summary:"
+
 #: How many findings of one group the payload describes individually. R42 puts
 #: no bound on the payload and a trace can carry thousands of findings of one
 #: kind, so an unbounded request is a request that is refused by a provider on
@@ -153,6 +172,7 @@ NARRATOR_ERROR_CODES: frozenset[str] = frozenset(
         "response_empty",
         "response_too_long",
         "response_control_characters",
+        "response_forged_marker",
         # The narrator's own: the client was never asked, or asked and the
         # script ran out of answers.
         "not_configured",
@@ -427,6 +447,7 @@ __all__ = [
     "NARRATOR_ERROR_CODES",
     "OVERALL_GROUP",
     "OVERALL_TITLE",
+    "RESERVED_PARAGRAPH_PREFIX",
     "SEVERITY_KEYS",
     "SNAPSHOT_VERSION_PATTERN",
     "AgentTotals",

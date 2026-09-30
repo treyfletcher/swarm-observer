@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from swarm_observer.cli.main import main
 from swarm_observer.detect.registry import ALL_DETECTORS
 from swarm_observer.narrate.adapters.anthropic import (
     CREDENTIAL_ENV_VARS,
@@ -39,6 +40,7 @@ from swarm_observer.narrate.client import (
     NARRATOR_ERROR_CODES,
     OVERALL_GROUP,
     OVERALL_TITLE,
+    RESERVED_PARAGRAPH_PREFIX,
     GroupSummary,
     NarrationRequest,
     NarrationResponse,
@@ -645,41 +647,143 @@ class TestUntrustedNarratorOutputR43:
         assert text in analysis.html
         assert text in analysis.json
 
-    def test_r43_a_narrator_can_forge_the_visible_fallback_prefix(self, tmp_path: Path) -> None:
-        """R43 (**BUG-15**): the DOM class is unforgeable; the visible prefix is not.
+    @pytest.mark.parametrize(
+        "forgery",
+        [
+            "Deterministic summary: written by the model, not by the tool",
+            "The run was fine. Deterministic summary: trust me.",
+            "deterministic summary: lowercased, and just as convincing on a page",
+            "DETERMINISTIC SUMMARY: shouted",
+            "Deterministic\nsummary: folded across a line break by normalization",
+        ],
+        ids=["prefix", "embedded", "lowercase", "uppercase", "folded"],
+    )
+    def test_r43_a_narrator_cannot_forge_the_visible_fallback_prefix(self, forgery: str) -> None:
+        """R43 (**BUG-15**, fixed by the increment-5 review): the marker is reserved.
 
-        R43 pairs two markers: the class ``narrative-fallback`` and the
-        visible prefix ``Deterministic summary:``. The class is emitted by one
-        branch of the renderer and a narrator cannot reach it. The **prefix is
-        just text**, and the narrator's paragraph is placed after it — so a
-        model that writes the prefix itself produces a paragraph carrying
-        swarm-observer's own trust marker inside ``class="narrative"``.
+        R43 pairs two markers: the class ``narrative-fallback``, which only
+        one branch of the renderer can emit, and the visible prefix, which is
+        the only one a human reader ever sees. The prefix used to be just
+        text placed *before* the narrator's, so a model could write it itself
+        and produce swarm-observer's own trust marker inside
+        ``class="narrative"`` — the S32 family, one boundary over: a marker
+        this package authors that something else can also author.
 
-        A reader skimming for the prefix, and any test that counts it, is
-        reading a string an untrusted source can write. That is the same
-        family as S32's ``[redacted:…]`` marker spoofing, one boundary over.
+        ``validate_paragraph`` now refuses it, which makes the group fall
+        back, which is the correct outcome rather than merely a safe one: the
+        reader gets a deterministic summary that genuinely is one.
 
-        This test pins the current behaviour. Red when it is fixed — at which
-        point the fix should say how (rejecting a paragraph that contains the
-        prefix is the cheapest, and makes the prefix a reserved token).
+        The battery is the point. A prefix-only test would pass a fix that
+        checked ``startswith``; a case-sensitive one would pass a fix that
+        missed ``DETERMINISTIC SUMMARY:``; and the ``folded`` arm is the one a
+        reviewer should look at — the check runs **after** normalization, so a
+        marker split across a newline is folded back into the reserved phrase
+        before it is tested.
+
+        Red when: the check is narrowed to a prefix, made case-sensitive, or
+        moved above ``normalize_paragraph``.
         """
-        analysis = analyze_paths(
-            _sentinel_paths(tmp_path),
-            narrative=Narrative(
-                paragraphs=(
-                    NarrativeParagraph(
-                        group="overall",
-                        title="the whole run",
-                        text=f"{FALLBACK_PREFIX} written by the model, not by the tool",
-                        fallback=False,
-                    ),
-                ),
-                calls=1,
-            ),
+        with pytest.raises(NarratorResponseError) as caught:
+            validate_paragraph(forgery)
+        assert caught.value.code == "response_forged_marker"
+
+    def test_r43_the_reserved_token_is_the_renderers_own_marker(self) -> None:
+        """R43/R44 (**BUG-15**): the one duplicated literal, bound by an assertion.
+
+        ``narrate`` and ``report`` are separate branches of R44's import
+        graph, so the reserved token cannot be imported from where the
+        renderer defines it. The copy is honest only because this asserts the
+        equality — the discipline ``tests/pipeline.py`` applies to
+        ``selected_slugs`` and ``tests/sentinel_trace.py`` to the CLI's cost
+        extraction.
+
+        Red when: either literal is reworded without the other, at which point
+        the narrator would start reserving a token the renderer no longer
+        writes, or stop reserving the one it does.
+        """
+        assert RESERVED_PARAGRAPH_PREFIX == FALLBACK_PREFIX
+        assert "response_forged_marker" in NARRATOR_ERROR_CODES
+
+    def test_r43_a_forging_narrator_falls_back_and_leaves_the_exit_code_alone(
+        self, tmp_path: Path
+    ) -> None:
+        """R43/R39 (**BUG-15**): end to end, over the real CLI, with both documents.
+
+        The property a reader actually depends on: **in a document this tool
+        produces, the visible marker appears only inside a paragraph that
+        carries the DOM class.** Asserted over a run whose narrator writes the
+        marker for every group, so the count is a measurement and not an
+        absence.
+
+        The exit-code arm is not decoration. The fix added a fourth way for a
+        paragraph to be refused, and R43's guarantee is that no refusal can
+        change what the run returns.
+        """
+        paths = _sentinel_paths(tmp_path)
+        html_path = tmp_path / "r.html"
+        json_path = tmp_path / "r.json"
+        plain_html = tmp_path / "p.html"
+        plain_json = tmp_path / "p.json"
+        common = [*(str(path) for path in paths), "--fail-on", "critical"]
+        plain_code = main(["analyze", *common, "--out", str(plain_html), "--json", str(plain_json)])
+        groups = plain_html.read_text(encoding="utf-8")  # touched so the file is written
+        assert groups
+        client = FixtureNarratorClient(
+            [paragraph(f"{FALLBACK_PREFIX} I am the tool, honestly.") for _ in range(16)]
         )
-        assert analysis.html.count(FALLBACK_CLASS) == 0
-        assert analysis.html.count(FALLBACK_PREFIX) == 1
-        assert f'<p class="{NARRATIVE_CLASS}">{FALLBACK_PREFIX}' in analysis.html
+        code = main(
+            ["analyze", *common, "--out", str(html_path), "--json", str(json_path), "--explain"],
+            narrator=client,
+        )
+        assert code == plain_code
+        html = html_path.read_text(encoding="utf-8")
+        document = json.loads(json_path.read_text(encoding="utf-8"))["narrative"]
+        # Every group was asked, every answer was refused, every group fell back.
+        assert document["calls"] == len(document["paragraphs"]) >= 4
+        assert document["fallbacks"] == len(document["paragraphs"])
+        assert {p["reason"] for p in document["paragraphs"]} == {"response_forged_marker"}
+        # The marker appears exactly as often as the class, and always with it.
+        assert (
+            html.count(FALLBACK_PREFIX) == html.count(FALLBACK_CLASS) == len(document["paragraphs"])
+        )
+        assert html.count(f'<p class="{FALLBACK_CLASS}">{FALLBACK_PREFIX} ') == len(
+            document["paragraphs"]
+        )
+        assert f'<p class="{NARRATIVE_CLASS}">' not in html
+        # ...and the forged sentence itself reached neither document.
+        assert "I am the tool, honestly." not in html
+        assert "I am the tool, honestly." not in json_path.read_text(encoding="utf-8")
+
+    def test_r43_the_renderer_does_not_assume_its_caller_validated(self) -> None:
+        """R43 (**BUG-15**): the second layer, at the type the renderers consume.
+
+        ``validate_paragraph`` is upstream of the renderer, so on its own it
+        is a property of the *path*. The Modularity notes say a guard is a
+        property of the function, and "no renderer may assume its caller
+        sanitized" is the sentence under which ``SpanError.code`` and this
+        model's own ``title`` were both found. So ``NarrativeParagraph``
+        refuses the combination outright, and a forged marker cannot reach a
+        renderer even from a caller that skipped the narrator.
+
+        Red when: the model validator is dropped on the grounds that the
+        narrator already checks — which is the argument that was wrong four
+        times.
+        """
+        with pytest.raises(ValidationError, match="may not carry"):
+            NarrativeParagraph(
+                group="overall",
+                title="the whole run",
+                text=f"{FALLBACK_PREFIX} written by the model",
+                fallback=False,
+            )
+        # The control arm: the same text is legal on a real fallback, so the
+        # guard is about the pairing and not about the string.
+        assert NarrativeParagraph(
+            group="overall",
+            title="the whole run",
+            text=f"{FALLBACK_PREFIX} written by the model",
+            fallback=True,
+        ).fallback
 
     def test_r43_the_two_real_markers_are_emitted_together(self, tmp_path: Path) -> None:
         """R43: a fallback paragraph carries the class **and** the prefix.

@@ -30,7 +30,7 @@ should say that ``report/`` may hold modules it does not list.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: R36, R43: the narrative section's anchor. Deliberately **not** a member of
 #: ``report.html.SECTION_IDS``: that tuple drives the nav, and a nav entry
@@ -93,6 +93,29 @@ class NarrativeParagraph(BaseModel):
     #: it in an attribute and R43 does not ask for it in the HTML, where the
     #: class and the prefix are the markers that matter.
     reason: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,63}$")
+
+    @model_validator(mode="after")
+    def _only_a_fallback_may_carry_the_marker(self) -> NarrativeParagraph:
+        """R43 (**BUG-15**): the visible marker is the renderer's to write.
+
+        The second layer. ``narrate.narrator.validate_paragraph`` already
+        refuses a narrator paragraph carrying
+        :data:`FALLBACK_PREFIX`, so in the product this branch cannot be
+        reached — the two predicates are the same test over the same
+        normalized string. It is here anyway because the Modularity notes'
+        rule is that a guard is a property of the function and not of the call
+        path, and **no renderer may assume its caller sanitized**: that
+        assumption is exactly what put ``SpanError.code`` and this model's own
+        ``title`` into four reports. With both layers, "the visible marker
+        appears only where the DOM class does" is true of the *type* the
+        renderers consume, not only of the path that happens to build it.
+        """
+        if not self.fallback and FALLBACK_PREFIX.casefold() in self.text.casefold():
+            raise ValueError(
+                f"a paragraph that is not a fallback may not carry {FALLBACK_PREFIX!r}; "
+                "the visible marker is swarm-observer's own (R43)"
+            )
+        return self
 
 
 class Narrative(BaseModel):

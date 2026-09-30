@@ -85,8 +85,14 @@ UNKNOWN_TOOL_NAME = "<unknown>"
 #: package authored, and :class:`Finding` refuses anything else.
 TRACE_DERIVED_METRIC_KEYS: frozenset[str] = frozenset({"tool_name"})
 
-#: The shape of a metrics string value swarm-observer authored itself.
-_AUTHORED_METRIC_VALUE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+#: The shape of a metrics string value swarm-observer authored itself. Named
+#: and exported rather than inlined because increment 5's narrator payload
+#: (R42) has to admit exactly this alphabet and nothing wider: a second copy of
+#: the pattern in ``narrate/`` would be a second definition of the same rule,
+#: which is the class of duplication R44 refuses for ``escape_html``.
+AUTHORED_METRIC_VALUE_PATTERN = r"[a-z][a-z0-9_]{0,63}"
+
+_AUTHORED_METRIC_VALUE = re.compile(AUTHORED_METRIC_VALUE_PATTERN)
 
 #: The two enumerated stand-ins a trace-derived metric key may carry instead of
 #: a recorded name.
@@ -481,6 +487,7 @@ def lower_median(values: Sequence[int]) -> int:
 
 
 __all__ = [
+    "AUTHORED_METRIC_VALUE_PATTERN",
     "FINDING_ID_HEX",
     "MAX_EVIDENCE_SPANS",
     "MAX_PREVIEWS",

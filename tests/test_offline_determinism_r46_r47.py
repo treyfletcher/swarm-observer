@@ -195,6 +195,18 @@ class TestNoSocketOnTheDefaultPathR46:
         ``ssl``, ``http``, ``urllib``, ``asyncio``, ``httpx``, ``requests`` or
         ``anthropic``. R44 covers ``anthropic``'s placement; this covers the
         rest.
+
+        **Amended in increment 5, in place rather than by deletion.** This
+        module was written when ``narrate/`` did not exist, and it forbade
+        ``anthropic`` everywhere under the package. R44 requires that import to
+        exist in exactly one module — ``narrate/adapters/anthropic.py`` — so
+        "nowhere" became false the moment the narrator landed. The rule is therefore narrowed to what
+        it always meant — its own docstring already said "R44 covers
+        ``anthropic``'s placement" — with the exemption written as a single
+        ``(module, name)`` pair rather than by dropping ``anthropic`` from
+        ``forbidden``: an import of it in any *other* module is still an
+        offender here as well as in R44's test, which is the arm that would
+        otherwise have been lost.
         """
         import ast
 
@@ -214,10 +226,15 @@ class TestNoSocketOnTheDefaultPathR46:
             "telnetlib",
             "xmlrpc",
         }
+        # R44: the one (module, top-level name) pair the package is allowed
+        # to hold. Anything else, anywhere, is an offender.
+        exempt = {("narrate/adapters/anthropic.py", "anthropic")}
         offenders: list[str] = []
         sources = sorted((REPO / "swarm_observer").rglob("*.py"))
         assert len(sources) > 20, "the scan found no source files"
+        seen_exempt = False
         for path in sources:
+            relative = path.relative_to(REPO / "swarm_observer").as_posix()
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 names: list[str] = []
@@ -226,9 +243,17 @@ class TestNoSocketOnTheDefaultPathR46:
                 elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                     names = [node.module]
                 for name in names:
-                    if name.split(".")[0] in forbidden:
-                        offenders.append(f"{path.relative_to(REPO)}: {name}")
+                    root = name.split(".")[0]
+                    if root not in forbidden:
+                        continue
+                    if (relative, root) in exempt:
+                        seen_exempt = True
+                        continue
+                    offenders.append(f"{path.relative_to(REPO)}: {name}")
         assert not offenders, offenders
+        # The exemption is not dead width: the module it names really does hold
+        # the import, so an exemption left behind after a deletion is visible.
+        assert seen_exempt, "the anthropic exemption matched nothing; delete it"
 
     def test_r46_the_static_scan_would_catch_an_added_transport_import(
         self, tmp_path: Path

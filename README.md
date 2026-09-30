@@ -206,6 +206,13 @@ Two artefacts, from one command:
   header, narrative (only with `--explain`), findings, timeline, cost, spans,
   warnings. The timeline is inline SVG with integer-only geometry.
 
+The HTML report's only interactivity is severity filtering and per-section
+collapse, from one inline script with no dependencies. Both are exercised in a
+real browser in CI (see `tests_browser/` below), which also re-asserts there —
+on the live DOM, after every control has been clicked — that the document still
+holds exactly one `<script>` and one `<style>`, no injected element, and no
+attribute outside the allowlist.
+
 At least one of the two is required. A run that names neither is a usage error,
 because a run that reports success without writing the file it was asked for is
 the failure the exit codes exist to prevent.
@@ -319,7 +326,7 @@ rather than a redesign:
 
 ```bash
 pip install -e ".[dev]"
-pytest                  # 2565 tests, offline, no credentials, ~48s
+pytest                  # 2921 tests, offline, no credentials, ~80s
 ruff check . && ruff format --check .
 mypy                    # strict
 ```
@@ -327,6 +334,29 @@ mypy                    # strict
 The suite must pass with every provider credential unset and with `anthropic`
 not installed. If it passes only because something was installed, it is not
 testing what it claims to.
+
+### The second tree: `tests_browser/`
+
+`tests/` parses the report; it never executes it. That gap shipped a real
+defect — the six section-collapse controls hid their own heading and button
+instead of the section's content, and the pinned SHA-256 over the inline script
+made the area *look* covered while proving only that the bytes had not changed.
+
+So the report's behaviour is tested in a real engine:
+
+```bash
+pip install playwright && playwright install chromium
+pytest tests_browser    # 23 tests, Chromium, nothing deselected
+```
+
+It is a separate top-level tree rather than a marker for two reasons that
+already existed: `tests/` must pass with only `.[dev]` installed, which a
+module-scope `import playwright` would break, and the suite-integrity rules
+forbid `importorskip` and `skipif`. It runs as **its own CI job** that installs
+Chromium and deselects nothing — a browser test CI skips would be exactly the
+kind of never-executed path this project keeps finding.
+`tests/test_browser_suite_wiring.py` runs in the offline job and fails if that
+tree is emptied, if the job is removed, or if either grows a filter.
 
 ## Status
 
@@ -336,7 +366,15 @@ testing what it claims to.
 | 2 | Detectors and the fixture corpus | shipped |
 | 3 | Cost accounting and the JSON report | shipped |
 | 4 | Self-contained HTML report, SVG timeline, security and determinism probes | shipped |
-| 5 | LLM narrator, replay seam, docs | in progress |
+| 5 | LLM narrator, replay seam, docs | shipped |
+
+**v1 is feature-complete**: 2921 offline tests plus 23 browser tests, green on
+Python 3.11 and 3.12, with `ruff`, `ruff format --check` and `mypy --strict`
+clean. Known-open items are recorded in the increment reviews under `docs/` —
+chiefly the queued spec amendments (S14–S40), the `--no-previews` finding-subset
+caveat above, and the fact that the bundled rate snapshot has not been reviewed
+by a human: the arithmetic over it is exhaustively tested, the numbers in it are
+not.
 
 ## How this was built
 
@@ -356,13 +394,22 @@ unable to fail** — a fixture set with no case that could trip it, an undeclare
 test dependency silently collecting zero tests, a guard that depends on an
 interpreter's recursion limit, a self-reported mutation score against a
 self-chosen mutation set, a hostile corpus that loaded four of the rendered
-fields as empty. Ten instances have been caught so far, every one of them by a
-different agent than the one that wrote it. Several of the harnesses in
-`tests/` exist specifically to make that class visible: a collection floor, a
-declared-skip ledger, a spec traceability map, a checked-in mutation ledger with
-a declared operator set, an AST scan for assertions no input can falsify, a
-model-derived sweep over every string field a report can render, and canaries
-that prove each check can still fail.
+fields as empty, a credential sweep run against a fixture whose findings array
+was empty. **Thirteen instances** have been caught so far, every one of them by
+a different agent than the one that wrote it.
+
+Several of the harnesses here exist specifically to make that class visible: a
+collection floor, a declared-skip ledger, a spec traceability map, a checked-in
+mutation ledger with a declared operator set and a control arm that *must*
+survive, an AST scan for assertions no input can falsify, a model-derived sweep
+over every string field a report can render, and canaries that prove each check
+can still fail.
+
+The thirteenth instance is the one that generalises. It was found by opening the
+report in a browser — something no test did — and the lesson was not that a
+check was weak but that a whole *kind* of check was missing while a SHA-256 pin
+made the area look covered. `tests_browser/` is the answer to that one, and the
+open question it leaves behind is what the next missing kind is.
 
 ## License
 

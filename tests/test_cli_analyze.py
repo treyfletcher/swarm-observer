@@ -546,26 +546,38 @@ class TestExitCodesR39:
         assert out == ""
         assert "invalid choice" in err
 
-    @pytest.mark.parametrize("flag", ["--explain"])
-    def test_r39_a_deferred_flag_is_a_usage_error_naming_its_increment(
-        self, tmp_path: Path, flag: str
-    ) -> None:
-        """A-c10: accepting a flag that does nothing is how a gap becomes a wrong report.
+    def test_r39_explain_is_accepted_and_cannot_change_the_exit_code(self, tmp_path: Path) -> None:
+        """R39/R43: ``--explain`` was the last deferred flag; now it does what it says.
 
-        ``--out`` left this parametrization in increment 4, when the HTML
-        renderer arrived and the refusal became the mirror of the defect A-c10
-        is about — a flag that is implemented and still refused. The arm is
-        **replaced**, not deleted: the test below asserts the flag now does what
-        it says, so a future regression that silently stopped writing the HTML
-        report is still red.
+        Replaces ``test_r39_a_deferred_flag_is_a_usage_error_naming_its_increment``,
+        whose parametrization emptied when increment 5 built the narrator —
+        the same substitution increment 4 made for ``--out``, and for the same
+        reason: a flag that is implemented and still refused is the mirror of
+        A-c10's flag that is accepted and does nothing.
+
+        Run offline with no ``anthropic`` and no credential, which is the
+        environment R45 pins, so every group falls back. That is the arm that
+        matters: **the exit code is byte-for-byte the no-``--explain`` run's**,
+        and stdout is too.
+
+        Red when: ``--explain`` raises, changes the exit code, or stops
+        producing a section.
         """
-        report = tmp_path / "r.json"
-        argv = ["analyze", str(CLEAN), "--json", str(report), flag]
-        code, out, err = invoke(*argv)
-        assert code == EXIT_USAGE
-        assert f"{flag} is not available yet" in err
-        assert out == ""
-        assert not report.exists()
+        plain = tmp_path / "plain.json"
+        explained = tmp_path / "explained.json"
+        without = invoke("analyze", str(CLEAN), "--json", str(plain))
+        with_flag = invoke("analyze", str(CLEAN), "--json", str(explained), "--explain")
+        assert without[0] == with_flag[0] == EXIT_OK
+        assert without[2] == with_flag[2] == ""
+        assert explained.exists()
+        document = json.loads(explained.read_text(encoding="utf-8"))
+        assert "narrative" not in json.loads(plain.read_text(encoding="utf-8"))
+        assert document["narrative"]["paragraphs"], "the flag produced no paragraph"
+        # No SDK and no key, so nothing was reachable and every paragraph is
+        # swarm-observer's own. The reason is the enumerated slug, never a
+        # provider's message.
+        assert all(p["fallback"] for p in document["narrative"]["paragraphs"])
+        assert {p["reason"] for p in document["narrative"]["paragraphs"]} == {"sdk_not_installed"}
 
     def test_r38_out_writes_the_html_report_and_is_no_longer_refused(self, tmp_path: Path) -> None:
         """R38 (increment 4): ``--out`` is accepted, and the file it names exists.
@@ -1318,29 +1330,41 @@ class TestWaveTwoGapsR38R39R40:
         assert out == document
         assert len(out.splitlines()) == len(DETECTOR_SLUGS)
 
-    def test_r39_two_deferred_flags_together_report_the_first_by_flag_name(self) -> None:
-        """R39 (mutation W-M08): a stable choice when both are given.
+    def test_r43_explain_adds_a_section_to_both_documents_and_moves_nothing_else(
+        self, tmp_path: Path
+    ) -> None:
+        """R43 (replacing mutation W-M08's test): additive, in both documents.
 
-        ``--out`` and ``--explain`` are both refused, and with both on the
-        command line exactly one message is printed. Which one must be a
-        function of the flags rather than of dict insertion order — R47's rule
-        applied to stderr. The walk is sorted by attribute name, so ``explain``
-        precedes ``out``.
+        ``test_r39_two_deferred_flags_together_report_the_first_by_flag_name``
+        asserted that a walk over ``_DEFERRED_FLAGS`` was sorted, so the
+        message did not depend on dict order. Increment 5 deleted that dict and
+        its loop, and ``W-M08`` is retired in ``tests/mutations.json`` with the
+        reason. This is its replacement at the same seam: two output paths, one
+        run, and the flag that is now wired.
+
+        Deliberately narrow — it asserts the **wiring**, not the document.
+        R43's byte-identity property and the fallback markers are the tester's,
+        and are still ledgered in ``traceability_pending.txt``.
+
+        Red when: ``--explain`` reaches one renderer and not the other.
         """
+        html_path, json_path = tmp_path / "r.html", tmp_path / "r.json"
         code, out, err = invoke(
-            "analyze", str(CLEAN), "--json", "k.json", "--out", "r.html", "--explain"
+            "analyze",
+            str(CLEAN),
+            "--out",
+            str(html_path),
+            "--json",
+            str(json_path),
+            "--explain",
         )
-        assert code == EXIT_USAGE
-        assert out == ""
-        assert err.count("\n") == 1
-        assert "--explain" in err
-        assert "--out" not in err
-        # And the same answer with the flags typed the other way round, which is
-        # what makes this a property of the walk and not of argv.
-        assert (
-            invoke("analyze", str(CLEAN), "--json", "k.json", "--explain", "--out", "r.html")[2]
-            == err
+        assert (code, err) == (EXIT_OK, "")
+        assert out == (
+            f"wrote {html_path.as_posix()}, {json_path.as_posix()}; "
+            "findings: critical=0 warning=0 info=0\n"
         )
+        assert 'id="narrative"' in html_path.read_text(encoding="utf-8")
+        assert "narrative" in json.loads(json_path.read_text(encoding="utf-8"))
 
     def test_r39_two_unknown_detectors_are_reported_by_the_first_in_sort_order(self) -> None:
         """R39 (mutation W-M06): ``unknown[0]``, with two unknown slugs.
@@ -1393,7 +1417,7 @@ class TestWaveTwoGapsR38R39R40:
         punctuated, renders as one terminated line and no more.
         """
 
-        def raising(argv: Any = None, *, stdout: Any = None) -> int:
+        def raising(argv: Any = None, *, stdout: Any = None, narrator: Any = None) -> int:
             raise UsageError("swarm-observer: error: something went wrong\n")
 
         monkeypatch.setattr(cli_main, "run", raising)

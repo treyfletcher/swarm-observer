@@ -86,10 +86,20 @@ from swarm_observer.report.json_out import (
     optional_timestamp,
     severity_counts,
 )
+from swarm_observer.report.narrative import (
+    FALLBACK_CLASS,
+    FALLBACK_PREFIX,
+    NARRATIVE_CAVEAT,
+    NARRATIVE_CLASS,
+    NARRATIVE_SECTION_ID,
+    NARRATIVE_SECTION_TITLE,
+    Narrative,
+)
 from swarm_observer.report.sanitize import (
     KIND_AUTHORED,
     KIND_FREE,
     KIND_IDENTIFIER,
+    KIND_NARRATOR,
     RenderOptions,
     TextKind,
     metric_value,
@@ -127,6 +137,7 @@ NO_TIMESTAMP_NOTE = "none recorded"
 NO_WALL_CLOCK_NOTE = "No wall-clock time from this run appears in this document."
 RECT_WIDTH_NOTE = "Rect width is a proportion of that span, rounded to whole units."
 SPANS_CAP_NOTE = "The JSON report carries every span; this table is capped for the browser."
+NARRATIVE_CALLS_NOTE = "Narrator calls made:"
 
 #: The ``data-severity`` value the "show everything" filter control carries. Not
 #: a :data:`~swarm_observer.detect.base.SEVERITIES` member — it is spelled
@@ -166,6 +177,8 @@ CSS_CLASSES: frozenset[str] = frozenset(
         "lanes",
         "meta-grid",
         "metrics",
+        "narrative",
+        "narrative-fallback",
         "nav",
         "note",
         "preview",
@@ -451,6 +464,7 @@ def attribute_allowlist(
     trace: Trace,
     findings: Sequence[Finding],
     timeline: Timeline,
+    narrative: Narrative | None = None,
 ) -> dict[str, frozenset[str]]:
     """R34: every attribute value this document may contain, generated from the inputs.
 
@@ -471,6 +485,14 @@ def attribute_allowlist(
     """
     span_ids = {span.span_id for span in trace.spans}
     finding_ids = {finding.finding_id for finding in findings}
+    # R43: the narrative anchor is an `id` the document carries only when
+    # `--explain` produced content, and never an `href` — nothing links to it,
+    # because a nav entry would be a byte outside the section that the flag
+    # changed. The entry is added only when the section is rendered, so an
+    # allowlist for a no-`--explain` render is exactly as wide as it was in
+    # increment 4 and cannot admit an id the document could not contain (the
+    # review's W5-A08).
+    section_ids = set(SECTION_IDS) | ({NARRATIVE_SECTION_ID} if narrative is not None else set())
     fragments = {f"#{value}" for value in span_ids | finding_ids | set(SECTION_IDS)}
     lane_ys = {_n(lane.lane * LANE_HEIGHT) for lane in timeline.lanes}
     return {
@@ -479,7 +501,7 @@ def attribute_allowlist(
         "http-equiv": frozenset({"Content-Security-Policy"}),
         "content": frozenset({CSP_CONTENT}),
         "class": frozenset(CSS_CLASSES | RECT_CLASSES),
-        "id": frozenset(set(SECTION_IDS) | span_ids | finding_ids),
+        "id": frozenset(section_ids | span_ids | finding_ids),
         "href": frozenset(fragments),
         "type": frozenset({"button"}),
         "role": frozenset({"img"}),
@@ -585,6 +607,56 @@ def _header_section(
         f"{w(NO_WALL_CLOCK_NOTE, kind=KIND_AUTHORED)}</p>"
     )
     return _section(w, "header", "Run", body)
+
+
+def _narrative_section(w: _Writer, narrative: Narrative) -> list[str]:
+    """R36 + R43: the ``--explain`` section, and nothing else in the document.
+
+    Three properties are load-bearing and all three are visible here:
+
+    * **Every paragraph is written with the ``narrator`` kind**, whether it is
+      the model's or swarm-observer's own template. Choosing the kind from
+      ``paragraph.fallback`` would put a judgment back at the call site the
+      increment-4 review's C1 removed, and redacting a template that contains
+      only counts and slugs costs nothing. A reader of this loop does not have
+      to know which paragraphs came from where in order to know they are all
+      escaped.
+    * **The two fallback markers R43 pairs are emitted by one branch**, so a
+      paragraph cannot carry the class without the visible prefix or the
+      prefix without the class. The narrator's own text is placed *after* the
+      prefix this package wrote, never instead of it, so a model that writes
+      "Deterministic summary:" itself cannot forge the marker.
+    * **No ``href``, and no nav entry.** The section has an ``id`` so R36's
+      anchor exists; nothing links to it, because a link would be a byte
+      outside the section that ``--explain`` changed.
+    """
+    body: list[str] = [f'<p class="caveat">{w(NARRATIVE_CAVEAT, kind=KIND_AUTHORED)}</p>']
+    if narrative.fallbacks:
+        reasons = ", ".join(narrative.reasons) or "no reason recorded"
+        body.append(
+            f'<p class="note">{_n(narrative.fallbacks)} of '
+            f"{_n(len(narrative.paragraphs))} paragraph(s) are swarm-observer's own "
+            f"deterministic summaries rather than the narrator's "
+            f"({w(reasons, kind=KIND_AUTHORED)}). "
+            f"{w(NARRATIVE_CALLS_NOTE, kind=KIND_AUTHORED)} {_n(narrative.calls)}.</p>"
+        )
+    for paragraph in narrative.paragraphs:
+        body.append(
+            f"<h3>{w(paragraph.title, kind=KIND_AUTHORED)} "
+            f"({w(paragraph.group, kind=KIND_AUTHORED)})</h3>"
+        )
+        if paragraph.fallback:
+            body.append(
+                f'<p class="{w(FALLBACK_CLASS, kind=KIND_AUTHORED)}">'
+                f"{w(FALLBACK_PREFIX, kind=KIND_AUTHORED)} "
+                f"{w(paragraph.text, kind=KIND_NARRATOR)}</p>"
+            )
+        else:
+            body.append(
+                f'<p class="{w(NARRATIVE_CLASS, kind=KIND_AUTHORED)}">'
+                f"{w(paragraph.text, kind=KIND_NARRATOR)}</p>"
+            )
+    return _section(w, NARRATIVE_SECTION_ID, NARRATIVE_SECTION_TITLE, body)
 
 
 def _grouped(findings: Sequence[Finding]) -> list[Finding]:
@@ -992,6 +1064,7 @@ def render_html(
     cost: CostReport,
     tool_version: str,
     options: RenderOptions,
+    narrative: Narrative | None = None,
 ) -> str:
     """The exact bytes of ``report.html`` (R34, R35, R36, R37, R47).
 
@@ -1033,6 +1106,12 @@ def render_html(
             options=options,
         )
     )
+    if narrative is not None:
+        # R36's fixed position: after the header block, before the findings.
+        # Whole lines, contiguous, and nothing else in the document moves --
+        # which is what makes R43's "strip the section and the bytes are
+        # identical" a property of the construction rather than of a test.
+        lines.extend(_narrative_section(w, narrative))
     span_ids = {span.seq: span.span_id for span in trace.spans[:SPANS_TABLE_CAP]}
     lines.extend(_findings_section(w=w, findings=findings, span_ids=span_ids, options=options))
     agents_by_id = {agent.agent_id: agent for agent in trace.agents}

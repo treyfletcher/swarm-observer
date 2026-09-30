@@ -55,10 +55,12 @@ from swarm_observer.cost.compute import (
 )
 from swarm_observer.detect.base import SEVERITIES, Finding
 from swarm_observer.model.trace import AgentRun, Span, TokenUsage, Trace
+from swarm_observer.report.narrative import Narrative
 from swarm_observer.report.sanitize import (
     KIND_AUTHORED,
     KIND_FREE,
     KIND_IDENTIFIER,
+    KIND_NARRATOR,
     RenderOptions,
     metric_value,
     optional_text,
@@ -356,6 +358,35 @@ def severity_counts(findings: Sequence[Finding]) -> dict[str, int]:
     return counts
 
 
+def narrative_document(narrative: Narrative, *, previews: bool) -> dict[str, Any]:
+    """The ``--explain`` section, as data (R43).
+
+    The HTML report marks a fallback with a class and a visible prefix; a
+    machine consumer gets the same two facts as ``fallback`` and ``reason``,
+    plus ``calls`` so "the narrator was never asked" is distinguishable from
+    "the narrator answered badly" — which matters because R43 makes both look
+    the same in the rendered prose.
+
+    The paragraph text goes through the ``narrator`` kind, exactly as in the
+    HTML renderer: a model-produced string is untrusted wherever it lands, and
+    ``report.json`` is the document with no escaping to hide behind.
+    """
+    return {
+        "calls": narrative.calls,
+        "fallbacks": narrative.fallbacks,
+        "paragraphs": [
+            {
+                "group": text(paragraph.group, kind=KIND_AUTHORED, previews=previews),
+                "title": text(paragraph.title, kind=KIND_AUTHORED, previews=previews),
+                "text": text(paragraph.text, kind=KIND_NARRATOR, previews=previews),
+                "fallback": paragraph.fallback,
+                "reason": optional_text(paragraph.reason, kind=KIND_AUTHORED, previews=previews),
+            }
+            for paragraph in narrative.paragraphs
+        ],
+    }
+
+
 def report_document(
     *,
     trace: Trace,
@@ -363,6 +394,7 @@ def report_document(
     cost: CostReport,
     tool_version: str,
     options: RenderOptions,
+    narrative: Narrative | None = None,
 ) -> dict[str, Any]:
     """The whole report as plain JSON-serializable data (R36).
 
@@ -373,7 +405,7 @@ def report_document(
     duplicating it here would put a second ordering rule in the package for the
     same objects (see A-c8).
     """
-    return {
+    document: dict[str, Any] = {
         "meta": {
             "report_format_version": REPORT_FORMAT_VERSION,
             "schema_version": text(
@@ -431,6 +463,13 @@ def report_document(
             for warning in trace.warnings
         ],
     }
+    if narrative is not None:
+        # Added only under ``--explain``. A key that always existed and was
+        # sometimes null would change every no-``--explain`` document, which
+        # R43 forbids for the HTML report and which there is no reason to do
+        # to the JSON one either.
+        document["narrative"] = narrative_document(narrative, previews=options.previews)
+    return document
 
 
 def render_json(
@@ -440,6 +479,7 @@ def render_json(
     cost: CostReport,
     tool_version: str,
     options: RenderOptions,
+    narrative: Narrative | None = None,
 ) -> str:
     """The exact bytes of ``report.json`` (R36, R47).
 
@@ -454,6 +494,7 @@ def render_json(
         cost=cost,
         tool_version=tool_version,
         options=options,
+        narrative=narrative,
     )
     return json.dumps(document, sort_keys=True, ensure_ascii=True, indent=2) + "\n"
 
@@ -472,6 +513,7 @@ __all__ = [
     "last_timestamp",
     "metric_value",
     "metrics_document",
+    "narrative_document",
     "optional_text",
     "optional_timestamp",
     "render_json",

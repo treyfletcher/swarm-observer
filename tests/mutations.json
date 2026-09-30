@@ -1731,7 +1731,9 @@
    "operator": "normalization-drop",
    "old": "    for attribute, (flag, reason) in sorted(_DEFERRED_FLAGS.items()):",
    "new": "    for attribute, (flag, reason) in _DEFERRED_FLAGS.items():",
-   "verdict": "killed"
+   "verdict": "retired",
+   "why_it_survives": "RETIRED, not survived. This mutant dropped the sort from the walk over cli.main._DEFERRED_FLAGS, so which deferred flag was reported first depended on dict insertion order rather than on the flags (R40, R47). It was killed in wave 2. Increment 5 wired --explain, which was the last deferred flag, so the dict and the loop are DELETED rather than left empty: a loop that can no longer run is a check that can no longer fail, which is this project signature defect written into the product. The anchor therefore no longer exists and the mutant has no subject. Its test is replaced in place by test_r43_explain_adds_a_section_to_both_documents_and_moves_nothing_else, which asserts the same seam (one run, two output paths) for the behaviour that replaced it. Sweeps skip entries with retired: true.",
+   "retired": true
   },
   {
    "id": "W-M09",

@@ -132,7 +132,7 @@ TEXT_KINDS: tuple[TextKind, ...] = (
 
 
 class RenderOptions(BaseModel):
-    """The flags whose values change what a report contains (R38, R43, R47).
+    """The flags whose values change what a report contains (R38, R47).
 
     Recorded in both documents because a reader who sees empty previews should
     be able to tell "``--no-previews`` was used" from "this trace had no text",
@@ -146,9 +146,16 @@ class RenderOptions(BaseModel):
     blocked_gap_seconds: int = Field(default=60, ge=0)
     #: The detector slugs this run was restricted to, in registry order.
     detectors: tuple[str, ...] = ()
-    #: True when ``--explain`` was given. Recorded so a reader can tell "the
-    #: narrator produced nothing" from "the narrator was never asked" (R43).
-    explain: bool = False
+
+    # There is deliberately **no** ``explain`` flag here, though the pattern of
+    # the other three invites one. R43 requires that with ``--explain`` off "no
+    # bytes anywhere in either report differ from a build with the flag
+    # absent", and both renderers write these options into their header — so a
+    # recorded ``explain=False`` would put the flag's name into every document
+    # that never used it, and a recorded ``explain=True`` would put a byte
+    # *outside* ``<section id="narrative">`` that R43's byte-identity clause
+    # forbids. The section's presence is the record: with the flag on it always
+    # exists, because the overall paragraph always does.
 
 
 def text(value: str, *, kind: TextKind, previews: bool) -> str:

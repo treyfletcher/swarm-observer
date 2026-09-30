@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>swarm-observer report</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --ink: #16181d;
+  --paper: #ffffff;
+  --muted: #5b6270;
+  --rule: #d7dae1;
+  --panel: #f6f7f9;
+  --info: #4a7fb5;
+  --warning: #b5822a;
+  --critical: #b1442f;
+  --model: #6f7ee0;
+  --tool: #3f9f8f;
+  --user: #9a8ac0;
+  --event: #9aa1ad;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+}
+.report { margin: 0 auto; max-width: 1080px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 0; }
+h3 { font-size: 14px; margin: 16px 0 4px; }
+.section { border-top: 1px solid var(--rule); margin-top: 28px; padding-top: 12px; }
+.section-title { align-items: center; display: flex; gap: 10px; }
+.toggle {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.collapsed > *:not(.section-title) { display: none; }
+.nav { color: var(--muted); display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 0; }
+.nav a { color: var(--muted); }
+.meta-grid {
+  display: grid;
+  gap: 2px 16px;
+  grid-template-columns: max-content 1fr;
+  margin: 10px 0;
+}
+.meta-grid dt { color: var(--muted); }
+.meta-grid dd { margin: 0; overflow-wrap: anywhere; }
+.counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.chip {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.caveat, .note, .provenance, .truncation, .empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0;
+}
+.table-wrap { overflow-x: auto; }
+.table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.table th, .table td {
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.table th { color: var(--muted); font-weight: 600; }
+.cell-num { font-variant-numeric: tabular-nums; text-align: right; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.filter {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+}
+.filter.active { background: var(--panel); font-weight: 600; }
+.hidden { display: none; }
+.finding { border: 1px solid var(--rule); border-radius: 6px; margin: 10px 0; padding: 10px 12px; }
+.finding-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 10px; }
+.finding-body { margin-top: 6px; }
+.sev { border-radius: 4px; color: var(--paper); font-size: 11px; padding: 1px 7px; }
+.finding[data-severity="info"] .sev { background: var(--info); }
+.finding[data-severity="warning"] .sev { background: var(--warning); }
+.finding[data-severity="critical"] .sev { background: var(--critical); }
+.metrics { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.preview {
+  background: var(--panel);
+  border-left: 3px solid var(--rule);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+}
+.lanes { list-style: none; margin: 8px 0; padding: 0; }
+.lanes li { color: var(--muted); font-size: 12px; }
+.lane-name { color: var(--ink); overflow-wrap: anywhere; }
+.timeline { border: 1px solid var(--rule); height: auto; width: 100%; }
+.timeline .lane { fill: var(--panel); }
+.bar.k-model_call { fill: var(--model); }
+.bar.k-tool_call { fill: var(--tool); }
+.bar.k-user_message { fill: var(--user); }
+.bar.k-system_event { fill: var(--event); }
+.bar.s-info { fill: var(--info); }
+.bar.s-warning { fill: var(--warning); }
+.bar.s-critical { fill: var(--critical); }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e7e9ee;
+    --paper: #14161a;
+    --muted: #9aa1ad;
+    --rule: #333842;
+    --panel: #1c1f25;
+  }
+}
+</style>
+</head>
+<body>
+<main class="report">
+<h1>swarm-observer report</h1>
+<nav class="nav">
+<a href="#header">header</a>
+<a href="#findings">findings</a>
+<a href="#timeline">timeline</a>
+<a href="#cost">cost</a>
+<a href="#spans">spans</a>
+<a href="#warnings">warnings</a>
+</nav>
+<section class="section" id="header">
+<div class="section-title"><h2>Run</h2><button class="toggle" type="button">hide</button></div>
+<dl class="meta-grid">
+<dt>trace id</dt><dd>b56ce1ac59ea0003</dd>
+<dt>adapter</dt><dd>claude_code_jsonl</dd>
+<dt>trace schema</dt><dd>1.0.0</dd>
+<dt>report format</dt><dd>1.0.0</dd>
+<dt>swarm-observer</dt><dd>0.1.0</dd>
+<dt>rate snapshot</dt><dd>2026-09-10 (2026-09-10)</dd>
+<dt>previews</dt><dd>included</dd>
+<dt>blocked-gap seconds</dt><dd>60</dd>
+<dt>detectors</dt><dd>repeated_tool_call, agent_loop, retry_storm, failed_tool_call, unresolved_tool_call, blocked_agent, anomalous_span</dd>
+</dl>
+<div class="counts">
+<span class="chip">1 agents</span>
+<span class="chip">10 spans</span>
+<span class="chip">0 findings</span>
+<span class="chip">critical 0</span>
+<span class="chip">warning 0</span>
+<span class="chip">info 0</span>
+<span class="chip">1 parse warnings</span>
+</div>
+<h3>source files</h3><div class="table-wrap"><table class="table">
+<tr><th>name</th><th>sha256</th><th>bytes</th><th>records</th></tr>
+<tr><td>clean_single_agent.jsonl</td><td>c0c43ef8a1d9f3d3d0c680139708b07600fe2f356a74660f689a427b3345d39c</td><td class="cell-num">5495</td><td class="cell-num">10</td></tr>
+</table></div>
+<p class="caveat">Trace-derived text is passed through a credential-shaped-substring redactor. Redaction is a courtesy that reduces accidental exposure in a shared report; it cannot defeat an adversary who controls the trace. Use --no-previews to omit trace free text entirely.</p>
+<p class="caveat">Costs are list-price estimates from a bundled rate snapshot at its snapshot date. They exclude batch and priority tiers, long-context tiers and any negotiated discount, and they are not a billing reconciliation.</p>
+<p class="provenance">swarm-observer 0.1.0; rates 2026-09-10 of 2026-09-10; trace's last timestamp 2026-03-02T09:00:18.000Z. No wall-clock time from this run appears in this document.</p>
+</section>
+<section class="section" id="narrative">
+<div class="section-title"><h2>Narrative</h2><button class="toggle" type="button">hide</button></div>
+<p class="caveat">This section is prose written by a language model from the findings&#x27; counts, severities and enumerated slugs. No trace text was sent to it. Its output is treated as untrusted: redacted and escaped like any trace string, and confined to text nodes. A paragraph carrying the deterministic-summary prefix was produced by swarm-observer itself rather than by the model.</p>
+<p class="note">1 of 1 paragraph(s) are swarm-observer's own deterministic summaries rather than the narrator's (sdk_not_installed). Narrator calls made: 1.</p>
+<h3>the whole run (overall)</h3>
+<p class="narrative-fallback">Deterministic summary: This run produced 0 findings from 0 detectors: 0 critical, 0 warning, 0 info. The trace holds 1 agent, 10 spans and 5 model calls, costing 0.000825 USD at rate snapshot 2026-09-10. Across every detector, the attributed waste is 0 tokens.</p>
+</section>
+<section class="section" id="findings">
+<div class="section-title"><h2>Findings</h2><button class="toggle" type="button">hide</button></div>
+<p class="caveat">Attributed waste sums the usage of model calls the trace shows were repeated or discarded. It is an attribution, not a counterfactual: a deduplicated run would have had different cache behaviour and would not have cost exactly this much less.</p>
+<div class="filters">
+<button class="filter" type="button" data-severity="all">all</button>
+<button class="filter" type="button" data-severity="critical">critical</button>
+<button class="filter" type="button" data-severity="warning">warning</button>
+<button class="filter" type="button" data-severity="info">info</button>
+</div>
+<p class="empty">No detector produced a finding for this trace.</p>
+</section>
+<section class="section" id="timeline">
+<div class="section-title"><h2>Timeline</h2><button class="toggle" type="button">hide</button></div>
+<div class="table-wrap"><table class="table">
+<tr><th>lane</th><th>agent index</th><th>agent</th><th>type</th><th>description</th><th>parent</th><th>depth</th><th>spans</th><th>drawn</th></tr>
+<tr data-agent="0"><td class="cell-num">0</td><td class="cell-num">0</td><td class="lane-name">root</td><td>—</td><td></td><td>—</td><td class="cell-num">—</td><td class="cell-num">10</td><td class="cell-num">10</td></tr>
+</table></div>
+<p class="note">One lane per agent, in agent-index order; the figure spans 18000 ms of trace time. Rect width is a proportion of that span, rounded to whole units.</p>
+<svg class="timeline" viewBox="0 0 1000 22" role="img" aria-label="execution timeline">
+<rect class="lane" x="0" y="0" width="1000" height="22" data-agent="0"></rect>
+<rect class="bar k-user_message s-none" x="0" y="5" width="1" height="12" data-seq="0" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="111" y="5" width="1" height="12" data-seq="1" data-agent="0"></rect>
+<rect class="bar k-tool_call s-none" x="111" y="5" width="56" height="12" data-seq="2" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="333" y="5" width="1" height="12" data-seq="3" data-agent="0"></rect>
+<rect class="bar k-tool_call s-none" x="333" y="5" width="56" height="12" data-seq="4" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="556" y="5" width="1" height="12" data-seq="5" data-agent="0"></rect>
+<rect class="bar k-tool_call s-none" x="556" y="5" width="56" height="12" data-seq="6" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="778" y="5" width="1" height="12" data-seq="7" data-agent="0"></rect>
+<rect class="bar k-tool_call s-none" x="778" y="5" width="56" height="12" data-seq="8" data-agent="0"></rect>
+<rect class="bar k-model_call s-none" x="999" y="5" width="1" height="12" data-seq="9" data-agent="0"></rect>
+</svg>
+</section>
+<section class="section" id="cost">
+<div class="section-title"><h2>Cost</h2><button class="toggle" type="button">hide</button></div>
+<dl class="meta-grid">
+<dt>total</dt><dd>0.000825 USD (0.00 USD)</dd>
+<dt>priced spans</dt><dd>5</dd>
+<dt>unpriced spans</dt><dd>0</dd>
+<dt>tokens</dt><dd>500</dd>
+<dt>unpriced tokens</dt><dd>0</dd>
+</dl>
+<h3>by agent</h3><div class="table-wrap"><table class="table">
+<tr><th>agent</th><th>index</th><th>priced</th><th>unpriced</th><th>tokens</th><th>cost USD</th></tr>
+<tr><td>root</td><td class="cell-num">0</td><td class="cell-num">5</td><td class="cell-num">0</td><td class="cell-num">500</td><td class="cell-num">0.000825</td></tr>
+</table></div>
+<h3>by model</h3><div class="table-wrap"><table class="table">
+<tr><th>model key</th><th>priced</th><th>tokens</th><th>cost USD</th></tr>
+<tr><td>claude-sonnet-4-5</td><td class="cell-num">5</td><td class="cell-num">500</td><td class="cell-num">0.000825</td></tr>
+</table></div>
+<h3>by detector</h3><div class="table-wrap"><table class="table">
+<tr><th>detector</th><th>findings</th><th>unknown cost</th><th>wasted tokens</th><th>of which unpriced</th><th>wasted USD</th></tr>
+</table></div>
+<h3>unpriced model calls</h3>
+<p class="empty">Every model call in this trace was priced.</p>
+<p class="caveat">Costs are list-price estimates from a bundled rate snapshot at its snapshot date. They exclude batch and priority tiers, long-context tiers and any negotiated discount, and they are not a billing reconciliation.</p>
+</section>
+<section class="section" id="spans">
+<div class="section-title"><h2>Spans</h2><button class="toggle" type="button">hide</button></div>
+<div class="table-wrap"><table class="table">
+<tr><th>seq</th><th>kind</th><th>agent</th><th>start</th><th>end</th><th>model</th><th>stop</th><th>tool</th><th>tool use id</th><th>digest</th><th>status</th><th>error</th><th>tokens</th><th>cost USD</th><th>previews</th></tr>
+<tr id="44e0a5ddda7e3552" data-seq="0"><td class="cell-num">0</td><td>user_message</td><td>root</td><td>2026-03-02T09:00:00.000Z</td><td>2026-03-02T09:00:00.000Z</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">text: Summarize this repository.</p></td></tr>
+<tr id="ee9727eaa2fa5cbc" data-seq="1"><td class="cell-num">1</td><td>model_call</td><td>root</td><td>2026-03-02T09:00:02.000Z</td><td>2026-03-02T09:00:02.000Z</td><td>claude-sonnet-4-5-20250929</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">100</td><td class="cell-num">0.000165</td><td><p class="preview">text: Working.</p></td></tr>
+<tr id="f70d00af60d0468f" data-seq="2"><td class="cell-num">2</td><td>tool_call</td><td>root</td><td>2026-03-02T09:00:02.000Z</td><td>2026-03-02T09:00:03.000Z</td><td>—</td><td>—</td><td>Read</td><td>toolu_1</td><td>49b2184dbc4cc603</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;file_path&quot;:&quot;README.md&quot;}</p><p class="preview">result: # project</p></td></tr>
+<tr id="6d28bb652372982e" data-seq="3"><td class="cell-num">3</td><td>model_call</td><td>root</td><td>2026-03-02T09:00:06.000Z</td><td>2026-03-02T09:00:06.000Z</td><td>claude-sonnet-4-5-20250929</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">100</td><td class="cell-num">0.000165</td><td><p class="preview">text: Working.</p></td></tr>
+<tr id="48f8fde8ce64befc" data-seq="4"><td class="cell-num">4</td><td>tool_call</td><td>root</td><td>2026-03-02T09:00:06.000Z</td><td>2026-03-02T09:00:07.000Z</td><td>—</td><td>—</td><td>Read</td><td>toolu_2</td><td>f2b6e9257abe8457</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;file_path&quot;:&quot;pyproject.toml&quot;}</p><p class="preview">result: [project]</p></td></tr>
+<tr id="440bf82b5cacd89e" data-seq="5"><td class="cell-num">5</td><td>model_call</td><td>root</td><td>2026-03-02T09:00:10.000Z</td><td>2026-03-02T09:00:10.000Z</td><td>claude-sonnet-4-5-20250929</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">100</td><td class="cell-num">0.000165</td><td><p class="preview">text: Working.</p></td></tr>
+<tr id="c382b2c7cf15b0f7" data-seq="6"><td class="cell-num">6</td><td>tool_call</td><td>root</td><td>2026-03-02T09:00:10.000Z</td><td>2026-03-02T09:00:11.000Z</td><td>—</td><td>—</td><td>Glob</td><td>toolu_3</td><td>3223610e34f9b4ec</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;pattern&quot;:&quot;*.py&quot;}</p><p class="preview">result: src&#x2F;app.py</p></td></tr>
+<tr id="140119fcb7c0ef82" data-seq="7"><td class="cell-num">7</td><td>model_call</td><td>root</td><td>2026-03-02T09:00:14.000Z</td><td>2026-03-02T09:00:14.000Z</td><td>claude-sonnet-4-5-20250929</td><td>tool_use</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">100</td><td class="cell-num">0.000165</td><td><p class="preview">text: Working.</p></td></tr>
+<tr id="54dcebea3e797967" data-seq="8"><td class="cell-num">8</td><td>tool_call</td><td>root</td><td>2026-03-02T09:00:14.000Z</td><td>2026-03-02T09:00:15.000Z</td><td>—</td><td>—</td><td>Grep</td><td>toolu_4</td><td>3223610e34f9b4ec</td><td>ok</td><td>—</td><td class="cell-num">0</td><td class="cell-num">—</td><td><p class="preview">input: {&quot;pattern&quot;:&quot;*.py&quot;}</p><p class="preview">result: no matches</p></td></tr>
+<tr id="9a3bca407572bcfc" data-seq="9"><td class="cell-num">9</td><td>model_call</td><td>root</td><td>2026-03-02T09:00:18.000Z</td><td>2026-03-02T09:00:18.000Z</td><td>claude-sonnet-4-5-20250929</td><td>end_turn</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="cell-num">100</td><td class="cell-num">0.000165</td><td><p class="preview">text: The project is a CLI with one runtime dependency.</p></td></tr>
+</table></div>
+</section>
+<section class="section" id="warnings">
+<div class="section-title"><h2>Parse warnings</h2><button class="toggle" type="button">hide</button></div>
+<div class="table-wrap"><table class="table">
+<tr><th>code</th><th>count</th><th>detail</th></tr>
+<tr><td>unknown_extra_key</td><td class="cell-num">35</td><td></td></tr>
+</table></div>
+</section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var doc = document;
+  function each(selector, visit) {
+    var nodes = doc.querySelectorAll(selector);
+    for (var i = 0; i < nodes.length; i += 1) {
+      visit(nodes[i]);
+    }
+  }
+  function applyFilter(wanted) {
+    each(".finding", function (node) {
+      var keep = wanted === "all" || node.getAttribute("data-severity") === wanted;
+      node.classList.toggle("hidden", !keep);
+    });
+    each(".filter", function (node) {
+      node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
+    });
+  }
+  each(".filter", function (node) {
+    node.addEventListener("click", function (event) {
+      applyFilter(event.currentTarget.getAttribute("data-severity"));
+    });
+  });
+  each(".toggle", function (node) {
+    node.addEventListener("click", function (event) {
+      event.currentTarget.parentNode.classList.toggle("collapsed");
+    });
+  });
+  applyFilter("all");
+})();
+</script>
+</body>
+</html>

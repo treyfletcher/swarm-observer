@@ -200,8 +200,8 @@ class TestNoSocketOnTheDefaultPathR46:
         module was written when ``narrate/`` did not exist, and it forbade
         ``anthropic`` everywhere under the package. R44 requires that import to
         exist in exactly one module — ``narrate/adapters/anthropic.py`` — so
-        "nowhere" became false the moment the narrator landed. The rule is therefore narrowed to what
-        it always meant — its own docstring already said "R44 covers
+        "nowhere" became false the moment the narrator landed. The rule is
+        therefore narrowed to what it always meant — its own docstring already said "R44 covers
         ``anthropic``'s placement" — with the exemption written as a single
         ``(module, name)`` pair rather than by dropping ``anthropic`` from
         ``forbidden``: an import of it in any *other* module is still an

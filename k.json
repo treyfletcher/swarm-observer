@@ -1,0 +1,519 @@
+{
+  "agents": [
+    {
+      "agent_id": "root",
+      "agent_index": 0,
+      "agent_type": null,
+      "depth": null,
+      "description": "",
+      "end": "2026-03-02T09:00:18.000Z",
+      "parent_agent_id": null,
+      "span_seqs": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "start": "2026-03-02T09:00:00.000Z"
+    }
+  ],
+  "cost": {
+    "by_agent": [
+      {
+        "agent_id": "root",
+        "agent_index": 0,
+        "cost_usd": "0.000825",
+        "priced_spans": 5,
+        "unpriced_spans": 0,
+        "usage": {
+          "cache_creation_1h_tokens": 0,
+          "cache_creation_5m_tokens": 0,
+          "cache_read_input_tokens": 250,
+          "input_tokens": 250,
+          "output_tokens": 0,
+          "total_tokens": 500
+        }
+      }
+    ],
+    "by_detector": [],
+    "by_model": [
+      {
+        "cost_usd": "0.000825",
+        "model_key": "claude-sonnet-4-5",
+        "priced_spans": 5,
+        "usage": {
+          "cache_creation_1h_tokens": 0,
+          "cache_creation_5m_tokens": 0,
+          "cache_read_input_tokens": 250,
+          "input_tokens": 250,
+          "output_tokens": 0,
+          "total_tokens": 500
+        }
+      }
+    ],
+    "currency": "USD",
+    "notes": {
+      "rates": "Costs are list-price estimates from a bundled rate snapshot at its snapshot date. They exclude batch and priority tiers, long-context tiers and any negotiated discount, and they are not a billing reconciliation.",
+      "waste": "Attributed waste sums the usage of model calls the trace shows were repeated or discarded. It is an attribution, not a counterfactual: a deduplicated run would have had different cache behaviour and would not have cost exactly this much less."
+    },
+    "snapshot": {
+      "currency": "USD",
+      "snapshot_date": "2026-09-10",
+      "sources": [
+        {
+          "as_of": "2026-09-10",
+          "id": "anthropic_pricing_current",
+          "label": "Anthropic API pricing, current models table (USD per million tokens; cache writes 1.25x base input at 5m and 2x at 1h)",
+          "models": [
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "claude-haiku-4-5",
+            "claude-mythos-5",
+            "claude-mythos-5-1",
+            "claude-opus-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "claude-sonnet-4-5",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5"
+          ],
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+        },
+        {
+          "as_of": "2026-09-10",
+          "id": "anthropic_pricing_legacy",
+          "label": "Anthropic API pricing, legacy and retired models section of the same page",
+          "models": [
+            "claude-3-5-haiku",
+            "claude-opus-4",
+            "claude-opus-4-1",
+            "claude-sonnet-4"
+          ],
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+        }
+      ],
+      "version": "2026-09-10"
+    },
+    "spans": [
+      {
+        "agent_id": "root",
+        "cost_usd": "0.000165",
+        "model": "claude-sonnet-4-5-20250929",
+        "model_key": "claude-sonnet-4-5",
+        "seq": 1,
+        "usage": {
+          "cache_creation_1h_tokens": 0,
+          "cache_creation_5m_tokens": 0,
+          "cache_read_input_tokens": 50,
+          "input_tokens": 50,
+          "output_tokens": 0,
+          "total_tokens": 100
+        }
+      },
+      {
+        "agent_id": "root",
+        "cost_usd": "0.000165",
+        "model": "claude-sonnet-4-5-20250929",
+        "model_key": "claude-sonnet-4-5",
+        "seq": 3,
+        "usage": {
+          "cache_creation_1h_tokens": 0,
+          "cache_creation_5m_tokens": 0,
+          "cache_read_input_tokens": 50,
+          "input_tokens": 50,
+          "output_tokens": 0,
+          "total_tokens": 100
+        }
+      },
+      {
+        "agent_id": "root",
+        "cost_usd": "0.000165",
+        "model": "claude-sonnet-4-5-20250929",
+        "model_key": "claude-sonnet-4-5",
+        "seq": 5,
+        "usage": {
+          "cache_creation_1h_tokens": 0,
+          "cache_creation_5m_tokens": 0,
+          "cache_read_input_tokens": 50,
+          "input_tokens": 50,
+          "output_tokens": 0,
+          "total_tokens": 100
+        }
+      },
+      {
+        "agent_id": "root",
+        "cost_usd": "0.000165",
+        "model": "claude-sonnet-4-5-20250929",
+        "model_key": "claude-sonnet-4-5",
+        "seq": 7,
+        "usage": {
+          "cache_creation_1h_tokens": 0,
+          "cache_creation_5m_tokens": 0,
+          "cache_read_input_tokens": 50,
+          "input_tokens": 50,
+          "output_tokens": 0,
+          "total_tokens": 100
+        }
+      },
+      {
+        "agent_id": "root",
+        "cost_usd": "0.000165",
+        "model": "claude-sonnet-4-5-20250929",
+        "model_key": "claude-sonnet-4-5",
+        "seq": 9,
+        "usage": {
+          "cache_creation_1h_tokens": 0,
+          "cache_creation_5m_tokens": 0,
+          "cache_read_input_tokens": 50,
+          "input_tokens": 50,
+          "output_tokens": 0,
+          "total_tokens": 100
+        }
+      }
+    ],
+    "total": {
+      "cost_usd": "0.000825",
+      "priced_spans": 5,
+      "unpriced_spans": 0,
+      "unpriced_usage": {
+        "cache_creation_1h_tokens": 0,
+        "cache_creation_5m_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0
+      },
+      "usage": {
+        "cache_creation_1h_tokens": 0,
+        "cache_creation_5m_tokens": 0,
+        "cache_read_input_tokens": 250,
+        "input_tokens": 250,
+        "output_tokens": 0,
+        "total_tokens": 500
+      }
+    },
+    "unpriced": []
+  },
+  "findings": [],
+  "meta": {
+    "adapter": "claude_code_jsonl",
+    "counts": {
+      "agents": 1,
+      "findings": 0,
+      "findings_by_severity": {
+        "critical": 0,
+        "info": 0,
+        "warning": 0
+      },
+      "spans": 10,
+      "warnings": 1
+    },
+    "notes": {
+      "redaction": "Trace-derived text is passed through a credential-shaped-substring redactor. Redaction is a courtesy that reduces accidental exposure in a shared report; it cannot defeat an adversary who controls the trace. Use --no-previews to omit trace free text entirely."
+    },
+    "options": {
+      "blocked_gap_seconds": 60,
+      "detectors": [
+        "repeated_tool_call",
+        "agent_loop",
+        "retry_storm",
+        "failed_tool_call",
+        "unresolved_tool_call",
+        "blocked_agent",
+        "anomalous_span"
+      ],
+      "previews": true
+    },
+    "report_format_version": "1.0.0",
+    "schema_version": "1.0.0",
+    "source_files": [
+      {
+        "bytes": 5495,
+        "name": "clean_single_agent.jsonl",
+        "records": 10,
+        "sha256": "c0c43ef8a1d9f3d3d0c680139708b07600fe2f356a74660f689a427b3345d39c"
+      }
+    ],
+    "tool": {
+      "name": "swarm-observer",
+      "version": "0.1.0"
+    },
+    "trace_id": "b56ce1ac59ea0003",
+    "trace_last_timestamp": "2026-03-02T09:00:18.000Z"
+  },
+  "narrative": {
+    "calls": 1,
+    "fallbacks": 1,
+    "paragraphs": [
+      {
+        "fallback": true,
+        "group": "overall",
+        "reason": "sdk_not_installed",
+        "text": "This run produced 0 findings from 0 detectors: 0 critical, 0 warning, 0 info. The trace holds 1 agent, 10 spans and 5 model calls, costing 0.000825 USD at rate snapshot 2026-09-10. Across every detector, the attributed waste is 0 tokens.",
+        "title": "the whole run"
+      }
+    ]
+  },
+  "spans": [
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:00.000Z",
+      "error": null,
+      "extras_dropped": 4,
+      "kind": "user_message",
+      "model": null,
+      "parent_span_id": null,
+      "seq": 0,
+      "span_id": "44e0a5ddda7e3552",
+      "start": "2026-03-02T09:00:00.000Z",
+      "stop_reason": null,
+      "text_preview": "Summarize this repository.",
+      "tool_input_digest": null,
+      "tool_input_preview": "",
+      "tool_name": null,
+      "tool_result_preview": "",
+      "tool_result_status": null,
+      "tool_use_id": null,
+      "usage": null
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:02.000Z",
+      "error": null,
+      "extras_dropped": 3,
+      "kind": "model_call",
+      "model": "claude-sonnet-4-5-20250929",
+      "parent_span_id": null,
+      "seq": 1,
+      "span_id": "ee9727eaa2fa5cbc",
+      "start": "2026-03-02T09:00:02.000Z",
+      "stop_reason": "tool_use",
+      "text_preview": "Working.",
+      "tool_input_digest": null,
+      "tool_input_preview": "",
+      "tool_name": null,
+      "tool_result_preview": "",
+      "tool_result_status": null,
+      "tool_use_id": null,
+      "usage": {
+        "cache_creation_1h_tokens": 0,
+        "cache_creation_5m_tokens": 0,
+        "cache_read_input_tokens": 50,
+        "input_tokens": 50,
+        "output_tokens": 0,
+        "total_tokens": 100
+      }
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:03.000Z",
+      "error": null,
+      "extras_dropped": 0,
+      "kind": "tool_call",
+      "model": null,
+      "parent_span_id": "ee9727eaa2fa5cbc",
+      "seq": 2,
+      "span_id": "f70d00af60d0468f",
+      "start": "2026-03-02T09:00:02.000Z",
+      "stop_reason": null,
+      "text_preview": "",
+      "tool_input_digest": "49b2184dbc4cc603",
+      "tool_input_preview": "{\"file_path\":\"README.md\"}",
+      "tool_name": "Read",
+      "tool_result_preview": "# project",
+      "tool_result_status": "ok",
+      "tool_use_id": "toolu_1",
+      "usage": null
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:06.000Z",
+      "error": null,
+      "extras_dropped": 3,
+      "kind": "model_call",
+      "model": "claude-sonnet-4-5-20250929",
+      "parent_span_id": null,
+      "seq": 3,
+      "span_id": "6d28bb652372982e",
+      "start": "2026-03-02T09:00:06.000Z",
+      "stop_reason": "tool_use",
+      "text_preview": "Working.",
+      "tool_input_digest": null,
+      "tool_input_preview": "",
+      "tool_name": null,
+      "tool_result_preview": "",
+      "tool_result_status": null,
+      "tool_use_id": null,
+      "usage": {
+        "cache_creation_1h_tokens": 0,
+        "cache_creation_5m_tokens": 0,
+        "cache_read_input_tokens": 50,
+        "input_tokens": 50,
+        "output_tokens": 0,
+        "total_tokens": 100
+      }
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:07.000Z",
+      "error": null,
+      "extras_dropped": 0,
+      "kind": "tool_call",
+      "model": null,
+      "parent_span_id": "6d28bb652372982e",
+      "seq": 4,
+      "span_id": "48f8fde8ce64befc",
+      "start": "2026-03-02T09:00:06.000Z",
+      "stop_reason": null,
+      "text_preview": "",
+      "tool_input_digest": "f2b6e9257abe8457",
+      "tool_input_preview": "{\"file_path\":\"pyproject.toml\"}",
+      "tool_name": "Read",
+      "tool_result_preview": "[project]",
+      "tool_result_status": "ok",
+      "tool_use_id": "toolu_2",
+      "usage": null
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:10.000Z",
+      "error": null,
+      "extras_dropped": 3,
+      "kind": "model_call",
+      "model": "claude-sonnet-4-5-20250929",
+      "parent_span_id": null,
+      "seq": 5,
+      "span_id": "440bf82b5cacd89e",
+      "start": "2026-03-02T09:00:10.000Z",
+      "stop_reason": "tool_use",
+      "text_preview": "Working.",
+      "tool_input_digest": null,
+      "tool_input_preview": "",
+      "tool_name": null,
+      "tool_result_preview": "",
+      "tool_result_status": null,
+      "tool_use_id": null,
+      "usage": {
+        "cache_creation_1h_tokens": 0,
+        "cache_creation_5m_tokens": 0,
+        "cache_read_input_tokens": 50,
+        "input_tokens": 50,
+        "output_tokens": 0,
+        "total_tokens": 100
+      }
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:11.000Z",
+      "error": null,
+      "extras_dropped": 0,
+      "kind": "tool_call",
+      "model": null,
+      "parent_span_id": "440bf82b5cacd89e",
+      "seq": 6,
+      "span_id": "c382b2c7cf15b0f7",
+      "start": "2026-03-02T09:00:10.000Z",
+      "stop_reason": null,
+      "text_preview": "",
+      "tool_input_digest": "3223610e34f9b4ec",
+      "tool_input_preview": "{\"pattern\":\"*.py\"}",
+      "tool_name": "Glob",
+      "tool_result_preview": "src/app.py",
+      "tool_result_status": "ok",
+      "tool_use_id": "toolu_3",
+      "usage": null
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:14.000Z",
+      "error": null,
+      "extras_dropped": 3,
+      "kind": "model_call",
+      "model": "claude-sonnet-4-5-20250929",
+      "parent_span_id": null,
+      "seq": 7,
+      "span_id": "140119fcb7c0ef82",
+      "start": "2026-03-02T09:00:14.000Z",
+      "stop_reason": "tool_use",
+      "text_preview": "Working.",
+      "tool_input_digest": null,
+      "tool_input_preview": "",
+      "tool_name": null,
+      "tool_result_preview": "",
+      "tool_result_status": null,
+      "tool_use_id": null,
+      "usage": {
+        "cache_creation_1h_tokens": 0,
+        "cache_creation_5m_tokens": 0,
+        "cache_read_input_tokens": 50,
+        "input_tokens": 50,
+        "output_tokens": 0,
+        "total_tokens": 100
+      }
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:15.000Z",
+      "error": null,
+      "extras_dropped": 0,
+      "kind": "tool_call",
+      "model": null,
+      "parent_span_id": "140119fcb7c0ef82",
+      "seq": 8,
+      "span_id": "54dcebea3e797967",
+      "start": "2026-03-02T09:00:14.000Z",
+      "stop_reason": null,
+      "text_preview": "",
+      "tool_input_digest": "3223610e34f9b4ec",
+      "tool_input_preview": "{\"pattern\":\"*.py\"}",
+      "tool_name": "Grep",
+      "tool_result_preview": "no matches",
+      "tool_result_status": "ok",
+      "tool_use_id": "toolu_4",
+      "usage": null
+    },
+    {
+      "agent_id": "root",
+      "end": "2026-03-02T09:00:18.000Z",
+      "error": null,
+      "extras_dropped": 3,
+      "kind": "model_call",
+      "model": "claude-sonnet-4-5-20250929",
+      "parent_span_id": null,
+      "seq": 9,
+      "span_id": "9a3bca407572bcfc",
+      "start": "2026-03-02T09:00:18.000Z",
+      "stop_reason": "end_turn",
+      "text_preview": "The project is a CLI with one runtime dependency.",
+      "tool_input_digest": null,
+      "tool_input_preview": "",
+      "tool_name": null,
+      "tool_result_preview": "",
+      "tool_result_status": null,
+      "tool_use_id": null,
+      "usage": {
+        "cache_creation_1h_tokens": 0,
+        "cache_creation_5m_tokens": 0,
+        "cache_read_input_tokens": 50,
+        "input_tokens": 50,
+        "output_tokens": 0,
+        "total_tokens": 100
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "code": "unknown_extra_key",
+      "count": 35,
+      "detail": ""
+    }
+  ]
+}

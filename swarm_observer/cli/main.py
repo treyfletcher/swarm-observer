@@ -22,10 +22,26 @@ Three rules it exists to keep:
   rendered in full, in memory, before anything is staged; a failure anywhere
   leaves a pre-existing report untouched rather than half-overwritten.
 
-Increment 4 wires ``analyze`` for both reports. ``--explain`` is still declared
-so ``--help`` shows R38's whole surface, and is still refused with a usage error
-until increment 5 builds it: accepting a flag that silently does nothing is how
-a missing feature becomes a wrong report.
+Increment 5 wires ``--explain``, and with it the last of R38's surface;
+``_DEFERRED_FLAGS`` and the loop that walked it are **deleted** rather than
+left as an empty dict, because a loop that can no longer run is a check that
+can no longer fail, and ``tests/mutations.json``'s ``W-M08`` — a mutant on that
+loop's ``sorted(...)`` — is retired in the same commit with the reason beside
+it.
+
+Two rules the narrator adds to the three above:
+
+* **``narrate/`` is imported inside the ``--explain`` branch, never at module
+  scope.** R43 says that with the flag off "``narrate/`` is never imported by
+  the analyze path", which is the strongest available form of R46's no-egress
+  promise: the default path cannot open a socket because the module that could
+  is never loaded. Type annotations that need those types use
+  :data:`typing.TYPE_CHECKING`.
+* **``--explain`` cannot change the exit code** (R39, R43).
+  :func:`~swarm_observer.narrate.narrator.narrate` raises nothing, the
+  narrative is assembled before either document is rendered, and
+  :func:`exit_code_for` is computed from the findings exactly as it is without
+  the flag.
 """
 
 from __future__ import annotations
@@ -34,12 +50,12 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import NoReturn, TextIO
+from typing import TYPE_CHECKING, NoReturn, TextIO
 
 from pydantic import ValidationError
 
 from swarm_observer import __version__
-from swarm_observer.cost.compute import CostError, compute_costs
+from swarm_observer.cost.compute import CostError, CostReport, compute_costs, format_usd
 from swarm_observer.cost.snapshot import SnapshotRateSource
 from swarm_observer.cost.source import RateSnapshotError
 from swarm_observer.detect.base import SEVERITY_RANK, DetectorConfig, Finding
@@ -51,10 +67,14 @@ from swarm_observer.detect.registry import (
 from swarm_observer.ingest.reader import atomic_write_texts
 from swarm_observer.ingest.registry import DEFAULT_ADAPTER, adapter_slugs, build_adapter
 from swarm_observer.ingest.source import IngestLimits, TraceError
-from swarm_observer.model.trace import schema_document
+from swarm_observer.model.trace import Trace, schema_document
 from swarm_observer.report.html import render_html
 from swarm_observer.report.json_out import render_json, severity_counts
+from swarm_observer.report.narrative import Narrative, NarrativeParagraph
 from swarm_observer.report.sanitize import RenderOptions
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; R43 forbids the runtime import
+    from swarm_observer.narrate.client import NarratorClient
 
 #: R39: the pinned exit codes.
 EXIT_OK = 0
@@ -76,17 +96,6 @@ FAIL_ON_CHOICES: tuple[str, ...] = ("none", "warning", "critical")
 
 #: The extension a directory argument expands to (R38).
 JSONL_SUFFIX = ".jsonl"
-
-#: Flags R38 declares whose implementation lands in a later increment. Naming
-#: them here — rather than omitting them — keeps ``--help`` honest about the
-#: v1 surface while making a run that depends on them fail loudly.
-#:
-#: Increment 4 removed ``out``: the HTML renderer exists, and a flag that is
-#: implemented and still refused is the mirror image of one that is accepted and
-#: does nothing.
-_DEFERRED_FLAGS = {
-    "explain": ("--explain", "the narrator arrives with increment 5"),
-}
 
 
 class UsageError(Exception):
@@ -170,7 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument(
         "--explain",
         action="store_true",
-        help="add an LLM-written narrative section (increment 5)",
+        help="add a narrative section written by an LLM from the findings' counts",
     )
     analyze.add_argument(
         "--no-previews",
@@ -390,7 +399,96 @@ def summary_line(written: Sequence[Path], findings: Sequence[Finding]) -> str:
     return f"wrote {paths}; findings: {tallies}\n"
 
 
-def analyze(args: argparse.Namespace, out: TextIO) -> int:
+def build_narrative(
+    *,
+    trace: Trace,
+    findings: Sequence[Finding],
+    cost: CostReport,
+    client: NarratorClient | None = None,
+) -> Narrative:
+    """Run the ``--explain`` pass and hand the renderers what they render (R42, R43).
+
+    Every import of ``narrate`` in this package is inside this function. R43
+    requires that with ``--explain`` off "``narrate/`` is never imported by the
+    analyze path", and a module-scope import would make that false for every
+    run of the tool — which would also quietly weaken R46, whose no-socket
+    promise is strongest when the code that could open one is never loaded.
+
+    The cost figures are extracted **here** rather than inside
+    ``narrate/summary.py``, because R44 forbids ``narrate`` from importing
+    ``cost`` while R42 requires per-agent and per-model totals in the payload.
+    This module is the one place allowed to see both sides. The extraction is
+    deliberately dumb: four integers and a money string per row, all of them
+    already computed by the cost engine, and not one trace-derived string —
+    ``AgentCost.agent_id`` and ``SpanCost.model`` are both left behind, which
+    is what keeps AC12's sentinel property a fact about types rather than
+    about this function's care. See **S34**.
+
+    Raises nothing. A narrator that cannot be built, cannot be reached or
+    answers badly produces a narrative of deterministic templates, and the
+    exit code is whatever it would have been without the flag (R39).
+    """
+    from swarm_observer.narrate.adapters.anthropic import AnthropicNarratorClient
+    from swarm_observer.narrate.client import AgentTotals, ModelTotals
+    from swarm_observer.narrate.narrator import narrate
+    from swarm_observer.narrate.summary import build_totals
+
+    totals = build_totals(
+        findings=findings,
+        agents=len(trace.agents),
+        spans=len(trace.spans),
+        model_calls=sum(1 for span in trace.spans if span.kind == "model_call"),
+        tokens=cost.total_usage.total,
+        cost_usd=format_usd(cost.total_cost_usd),
+        priced_spans=cost.priced_spans,
+        unpriced_spans=cost.unpriced_spans,
+        by_agent=[
+            AgentTotals(
+                agent_index=row.agent_index,
+                priced_spans=row.priced_spans,
+                unpriced_spans=row.unpriced_spans,
+                tokens=row.usage.total,
+                cost_usd=format_usd(row.cost_usd),
+            )
+            for row in cost.by_agent
+        ],
+        by_model=[
+            ModelTotals(
+                model_key=row.model_key,
+                priced_spans=row.priced_spans,
+                tokens=row.usage.total,
+                cost_usd=format_usd(row.cost_usd),
+            )
+            for row in cost.by_model
+        ],
+    )
+    narration = narrate(
+        client=AnthropicNarratorClient() if client is None else client,
+        findings=findings,
+        totals=totals,
+        rate_snapshot_version=cost.meta.version,
+    )
+    return Narrative(
+        paragraphs=tuple(
+            NarrativeParagraph(
+                group=paragraph.group,
+                title=paragraph.title,
+                text=paragraph.text,
+                fallback=paragraph.fallback,
+                reason=paragraph.reason,
+            )
+            for paragraph in narration.paragraphs
+        ),
+        calls=narration.calls,
+    )
+
+
+def analyze(
+    args: argparse.Namespace,
+    out: TextIO,
+    *,
+    narrator: NarratorClient | None = None,
+) -> int:
     """R38-R40: ingest → detect → cost → render, then one line and an exit code.
 
     R38 writes ``--out`` as required and ``--json`` as optional. What is
@@ -400,9 +498,6 @@ def analyze(args: argparse.Namespace, out: TextIO) -> int:
     with neither flag is still a usage error, because a run that reports success
     without writing the file it was asked for is the failure A-c10 is about.
     """
-    for attribute, (flag, reason) in sorted(_DEFERRED_FLAGS.items()):
-        if getattr(args, attribute):
-            raise UsageError(f"{PROGRAM}: error: {flag} is not available yet: {reason}")
     if args.out is None and args.json_path is None:
         raise UsageError(f"{PROGRAM}: error: one of --out or --json is required")
 
@@ -439,6 +534,15 @@ def analyze(args: argparse.Namespace, out: TextIO) -> int:
         blocked_gap_seconds=config.blocked_gap_seconds,
         detectors=selected_slugs(config),
     )
+    # R43: the narrative is produced *before* either document is rendered, so
+    # both carry the same paragraphs and A-d11's "both documents are staged in
+    # one call" is unaffected. `build_narrative` raises nothing, so the line
+    # below cannot change the exit code or the fail-closed behaviour.
+    narrative = (
+        None
+        if not args.explain
+        else build_narrative(trace=trace, findings=findings, cost=cost, client=narrator)
+    )
     # Both documents are rendered in full, in memory, before either is staged
     # (R11): a renderer that raised halfway through would otherwise leave one
     # report written and the other not, which is a partial result with a
@@ -451,6 +555,7 @@ def analyze(args: argparse.Namespace, out: TextIO) -> int:
             cost=cost,
             tool_version=__version__,
             options=options,
+            narrative=narrative,
         )
     if json_path is not None:
         documents[json_path] = render_json(
@@ -459,6 +564,7 @@ def analyze(args: argparse.Namespace, out: TextIO) -> int:
             cost=cost,
             tool_version=__version__,
             options=options,
+            narrative=narrative,
         )
     atomic_write_texts(documents)
     # R40: the paths in the order R38 lists the flags, not in dict order — the
@@ -468,7 +574,12 @@ def analyze(args: argparse.Namespace, out: TextIO) -> int:
     return exit_code_for(findings, args.fail_on)
 
 
-def run(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> int:
+def run(
+    argv: Sequence[str] | None = None,
+    *,
+    stdout: TextIO | None = None,
+    narrator: NarratorClient | None = None,
+) -> int:
     """Dispatch one invocation and return its exit code.
 
     Raises :class:`~swarm_observer.ingest.source.TraceError`,
@@ -487,7 +598,7 @@ def run(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> i
         out.write(detectors_document())
         return EXIT_OK
     if args.command == "analyze":
-        return analyze(args, out)
+        return analyze(args, out, narrator=narrator)
     # argparse's `required=True` makes this unreachable for real invocations;
     # it exists so a future subcommand cannot fall through silently.
     parser.error(f"unknown command: {args.command!r}")
@@ -498,6 +609,7 @@ def main(
     *,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
+    narrator: NarratorClient | None = None,
 ) -> int:
     """Console-script entry point (R11, R39, R40).
 
@@ -509,7 +621,7 @@ def main(
     """
     err = sys.stderr if stderr is None else stderr
     try:
-        return run(argv, stdout=stdout)
+        return run(argv, stdout=stdout, narrator=narrator)
     except (TraceError, RateSnapshotError, CostError) as exc:
         err.write(exc.cli_line + "\n")
         return EXIT_FAIL_CLOSED

@@ -52,6 +52,15 @@ REQUIRED_CANARIES: dict[str, int] = {
     # certain canaries to exist and does not forbid others (increment-1 review,
     # tension 1), and a debt written down is the only kind that gets paid.
     "metrics_redaction_dropped": 4,
+    # Not one of R50's seven either. Added by the increment-5 tester, in the
+    # same commit as the canary. R43's per-group fallback has an unusual
+    # failure mode: when it breaks, a paragraph still renders, the section
+    # still exists and the exit code is unchanged -- what is lost is a
+    # reader's ability to tell swarm-observer's own summary from a language
+    # model's prose, and (for the A-e6 short-circuit) the number of outbound
+    # requests a refused credential produces. Silent and cosmetic is exactly
+    # the failure mode R50 exists for.
+    "narrator_fallback_dropped": 5,
     # Increment 3 note for the tester: ``report/redact.py`` (R33) landed early,
     # because R30 requires the unpriced table's recorded model id to be redacted
     # and ``report/json_out.py`` cannot honestly write trace text without it.
@@ -87,7 +96,11 @@ R50_REQUIRED_BY_NAME: frozenset[str] = frozenset(
 #: ``test_r50_every_canary_the_requirement_names_is_checked_in``: the old test
 #: asserted the debt was non-empty, and an assertion that a completed ledger
 #: must stay incomplete is not a check anybody should keep.
-CURRENT_INCREMENT = 4
+#: Increment 5 (tester). Bumped here, in the same commit as
+#: ``narrator_fallback_dropped``, so the ledger and the directory move
+#: together -- the discipline increments 3 and 4 used and the one the
+#: increment-5 coder deliberately left to this role.
+CURRENT_INCREMENT = 5
 
 
 def all_test_modules() -> list[str]:
@@ -214,12 +227,18 @@ class TestCanaryLedgerR50:
         Red when: the outstanding computation is deleted along with the debt it
         used to describe.
         """
-        probe = {**REQUIRED_CANARIES, "narrator_fallback_dropped": 5}
+        # The hypothetical moved from `narrator_fallback_dropped: 5` to an
+        # increment-6 name when increment 5 delivered that canary and bumped
+        # `CURRENT_INCREMENT`. The coder's PR names this substitution as one
+        # the tester owes in the same commit; leaving the old probe would
+        # have made a *delivered* canary read as an outstanding debt, which
+        # is the mirror of the assertion this test replaced.
+        probe = {**REQUIRED_CANARIES, "replay_target_unconstrained": 6}
         outstanding = {
             name: increment for name, increment in probe.items() if increment > CURRENT_INCREMENT
         }
-        assert outstanding == {"narrator_fallback_dropped": 5}
-        assert all(increment <= 5 for increment in REQUIRED_CANARIES.values())
+        assert outstanding == {"replay_target_unconstrained": 6}
+        assert all(increment <= CURRENT_INCREMENT for increment in REQUIRED_CANARIES.values())
 
     def test_r50_every_canary_module_proves_a_failure(self) -> None:
         """R50: a canary must assert its guard *raises*, whether or not it is required.
@@ -235,14 +254,34 @@ class TestCanaryLedgerR50:
         "canary" that never asserts a failure is a canary in name only, and is
         the thing R50 exists to prevent. That is now checked directly, so an
         extra canary is welcome and an inert one is not.
+
+        **Widened by the increment-5 review, and the reason is the same one
+        that widened it the first time.** The check was ``"pytest.raises" in
+        source`` — a syntactic form, not the property. Some guards cannot be
+        proven to fail in the process running the assertion: R49's two hooks
+        fail a run by setting the **session's exit status**, so the only
+        faithful proof is a subprocess whose return code is non-zero. AC14
+        names both of those as required canaries and neither had one, partly
+        because the directory's own gate rejected the only shape in which
+        they can be written. A guard whose form requirement excludes the
+        guards it most needs is, once again, this project's signature defect
+        wearing a suite-integrity badge.
+
+        So either proof is accepted, and an inert canary is still refused.
         """
         canaries = sorted((TESTS_DIR / "canaries").glob("test_canary_*.py"))
         assert canaries, "the canary directory is empty"
         for path in canaries:
             source = path.read_text(encoding="utf-8")
-            assert "pytest.raises" in source, (
+            # Two ways to observe a guard failing: it raises here, or it fails
+            # a session over there. Nothing else counts.
+            raises = "pytest.raises" in source
+            exits_non_zero = "returncode != 0" in source
+            assert raises or exits_non_zero, (
                 f"{path.relative_to(REPO)} asserts no failure; a canary that cannot "
-                "observe its guard failing is a canary in name only (R50)"
+                "observe its guard failing is a canary in name only (R50). Assert "
+                "`pytest.raises(...)`, or a subprocess `returncode != 0` for a guard "
+                "whose failure is a session exit status."
             )
             assert "R50" in source, f"{path.relative_to(REPO)} does not cite R50"
 
@@ -439,6 +478,21 @@ class TestMutationLedgerR49:
             "swarm_observer/report/sanitize.py",
             "swarm_observer/report/timeline.py",
             "swarm_observer/report/html.py",
+            # Increment 5 (tester). The coder's PR §9.5 named these six as a
+            # gap it would not close unilaterally, for the same reason
+            # increment 4's coder gave: "what a sweep must cover" is a
+            # decision, not a transcription. Every module this increment
+            # created is here. `narrate/narrator.py` is the one the coder
+            # asked for most loudly -- the fatal-code set, the `stopped`
+            # short-circuit, the validation order and the
+            # `except AssertionError: raise` clause are each one character
+            # from a wrong answer.
+            "swarm_observer/narrate/client.py",
+            "swarm_observer/narrate/summary.py",
+            "swarm_observer/narrate/narrator.py",
+            "swarm_observer/narrate/fixture.py",
+            "swarm_observer/report/narrative.py",
+            "swarm_observer/replay/target.py",
         ):
             assert required in modules, required
             mine = [item for item in self.live_mutations() if item["module"] == required]

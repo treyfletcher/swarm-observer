@@ -29,6 +29,7 @@ from swarm_observer.ingest.source import IngestLimits
 from swarm_observer.model.trace import Trace
 from swarm_observer.report.html import attribute_allowlist, render_html
 from swarm_observer.report.json_out import render_json
+from swarm_observer.report.narrative import Narrative
 from swarm_observer.report.sanitize import RenderOptions
 from swarm_observer.report.timeline import Timeline, build_timeline
 
@@ -44,10 +45,18 @@ class Analysis:
     timeline: Timeline
     html: str
     json: str
+    #: The ``--explain`` section these documents were rendered with, or
+    #: ``None`` for the default path (increment 5, R43).
+    narrative: Narrative | None = None
 
     def allowlist(self) -> dict[str, frozenset[str]]:
         """R34's allowlist for *these* inputs — never harvested from the output."""
-        return attribute_allowlist(trace=self.trace, findings=self.findings, timeline=self.timeline)
+        return attribute_allowlist(
+            trace=self.trace,
+            findings=self.findings,
+            timeline=self.timeline,
+            narrative=self.narrative,
+        )
 
 
 def analyze_paths(
@@ -57,12 +66,17 @@ def analyze_paths(
     blocked_gap_seconds: int = 60,
     detectors: frozenset[str] | None = None,
     limits: IngestLimits | None = None,
+    narrative: Narrative | None = None,
 ) -> Analysis:
     """Run the analyze path over ``paths`` and return inputs and both documents."""
     adapter = build_adapter("claude_code_jsonl", no_previews=not previews)
     trace = adapter.load(list(paths), limits or IngestLimits())
     return analyze_trace(
-        trace, previews=previews, blocked_gap_seconds=blocked_gap_seconds, detectors=detectors
+        trace,
+        previews=previews,
+        blocked_gap_seconds=blocked_gap_seconds,
+        detectors=detectors,
+        narrative=narrative,
     )
 
 
@@ -72,6 +86,7 @@ def analyze_trace(
     previews: bool = True,
     blocked_gap_seconds: int = 60,
     detectors: frozenset[str] | None = None,
+    narrative: Narrative | None = None,
 ) -> Analysis:
     """The half of :func:`analyze_paths` that starts from an already-built ``Trace``."""
     config = DetectorConfig(blocked_gap_seconds=blocked_gap_seconds, enabled=detectors)
@@ -99,12 +114,14 @@ def analyze_trace(
         cost=cost,
         options=options,
         timeline=build_timeline(trace, findings),
+        narrative=narrative,
         html=render_html(
             trace=trace,
             findings=findings,
             cost=cost,
             tool_version=__version__,
             options=options,
+            narrative=narrative,
         ),
         json=render_json(
             trace=trace,
@@ -112,6 +129,7 @@ def analyze_trace(
             cost=cost,
             tool_version=__version__,
             options=options,
+            narrative=narrative,
         ),
     )
 

@@ -211,6 +211,40 @@ class TestImportBoundariesR44:
             f"escape_html must be defined once, in report/escape.py; found {definitions}"
         )
 
+    def test_r44_only_the_text_boundary_calls_redact(self) -> None:
+        """R44/R33 (increment-5 tester): one redaction call site, as a scan.
+
+        The shape of ``test_r44_one_definition_of_escape_html``, one boundary
+        over. Escaping has one definition and a test that says so; redaction
+        has one *call site* and, until now, nothing that said so — which is
+        the asymmetry the increment-4 review's C1 was about, since the
+        redaction half is the half that has leaked in every increment.
+
+        ``report/sanitize.py`` is the only module allowed to call ``redact``.
+        A second call site is how a fifth text boundary gets added beside the
+        fourth, with its own idea of which fields are trace-derived.
+
+        Red when: a renderer imports ``redact`` directly, or a new module
+        under ``report/`` grows its own classification.
+        """
+        callers: set[str] = set()
+        for module_path in MODULES:
+            relative = module_path.relative_to(PACKAGE).as_posix()
+            if relative == "report/redact.py":
+                continue
+            for node in ast.walk(parse(module_path)):
+                if isinstance(node, ast.Call) and ast.unparse(node.func).endswith("redact"):
+                    callers.add(relative)
+                if (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module == "swarm_observer.report.redact"
+                ):
+                    callers.add(relative)
+        assert callers == {"report/sanitize.py"}, (
+            "redact must be called from report/sanitize.py and nowhere else; "
+            f"found {sorted(callers)}"
+        )
+
     def test_r44_detectors_are_pure(self) -> None:
         """R44: no detector reads a clock, the filesystem, or the environment."""
         for module_path in MODULES:

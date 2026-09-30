@@ -161,15 +161,34 @@ class TestTraceabilityGuardR52:
         assert fake - spec_requirements() == {"R999"}
 
     def test_r52_an_uncited_requirement_with_no_ledger_entry_is_detected(self) -> None:
-        """R52: dropping a line from the ledger while uncited fails the check."""
-        pending = pending_requirements()
+        """R52: an id that is neither cited nor ledgered fails the check.
+
+        **Rewritten by the increment-5 tester, and the reason is the same one
+        increment 4 gave for replacing ``test_r50_later_canaries_are_ledgered_not_forgotten``.**
+        The previous version asserted ``pending - cited`` was **non-empty** —
+        correct while a debt remained, and wrong the moment it was paid.
+        Increment 5 cites R41 and R42, ``traceability_pending.txt`` is now
+        empty, and an assertion that a completed ledger must stay incomplete
+        is not a check anybody should keep.
+
+        So the guard's arithmetic is driven against a **probe** — an id the
+        spec defines, cited by nothing, ledgered by nothing — which keeps the
+        mechanism exercised whether or not a real debt exists.
+
+        Red when: the uncited computation is deleted along with the debt it
+        used to describe.
+        """
+        requirements = spec_requirements()
         cited = cited_requirements()
-        assert spec_requirements() - cited - pending == set()
-        # Simulate the tripping input: remove one still-uncited id from the ledger.
-        uncited_and_ledgered = sorted(pending - cited)
-        assert uncited_and_ledgered, "the ledger is empty; this arm would be vacuous"
-        shrunk = pending - {uncited_and_ledgered[0]}
-        assert spec_requirements() - cited - shrunk == {uncited_and_ledgered[0]}
+        pending = pending_requirements()
+        # The real ledger is consistent: nothing is both uncited and unledgered.
+        assert requirements - cited - pending == set()
+        # The mechanism, against a probe rather than against the real state.
+        probe_id = sorted(requirements, key=lambda item: int(item[1:]))[0]
+        assert requirements - (cited - {probe_id}) - pending == {probe_id}
+        # ...and it stays quiet when that id *is* ledgered, so the check is
+        # not simply always-fail.
+        assert requirements - (cited - {probe_id}) - (pending | {probe_id}) == set()
 
     def test_r52_a_ledger_line_that_is_actually_cited_is_detected(self) -> None:
         """R52: the ledger can only shrink, so a covered id must be removed."""

@@ -56,6 +56,16 @@ strict = true
 warn_unreachable = true
 files = ["swarm_observer"]
 
+# R45: `anthropic` is the `[explain]` extra and is deliberately absent from the
+# environment CI type-checks in, so `narrate/adapters/anthropic.py`'s lazy
+# import has no stub to resolve. An `ignore_missing_imports` override rather
+# than an inline `# type: ignore`: strict mode's `warn_unused_ignores` would
+# turn the inline form red in an environment where the extra *is* installed,
+# which is the one place a developer most wants the checker working.
+[[tool.mypy.overrides]]
+module = ["anthropic", "anthropic.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

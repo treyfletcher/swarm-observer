@@ -5,10 +5,16 @@ multi-agent system already wrote, and get back a report that says what the
 agents did, what went wrong, and what it cost — with no instrumentation, no
 SDK, and no changes to the system being observed.
 
-```
+```bash
+pip install -e .
+
 swarm-observer analyze ~/.claude/projects/my-project/<session>/subagents/ \
-  --json report.json --fail-on warning
+  --out report.html --json report.json --fail-on warning
 ```
+
+That command needs no credentials, opens no socket, and writes exactly the two
+files it names. Open `report.html` in any browser, offline; forward it to a
+colleague and it renders identically on their machine.
 
 ## Why
 
@@ -23,19 +29,91 @@ deterministic detectors over it, prices every model call, and renders a report.
 It reads what is already there, so there is nothing to add to the system you
 want to observe and no way for it to affect that system's behavior.
 
+**Zero instrumentation is the product promise**, not a convenience: swarm-observer
+never runs inside the observed system, never requires an SDK, never asks it to
+emit anything, and cannot change how it behaves. The only thing it needs is a
+directory of transcripts.
+
+## The threat model, up front
+
+Every prompt, tool argument, tool result and agent message in a trace was
+produced by an agent that may itself have processed hostile input — a fetched
+web page, a malicious repository, a poisoned document. swarm-observer renders
+that content into an HTML file a human opens in a browser and forwards to
+colleagues. **The trace is the attacker's channel and the report is the
+payload's delivery vehicle.**
+
+So every trace-derived byte is treated as hostile:
+
+- **Escaped at one boundary.** There is exactly one `escape_html` definition in
+  the package, applied to *every* string a renderer writes, trusted or not. A
+  second definition, or a second character-replacement table anywhere, fails
+  the suite.
+- **Classified at one boundary.** Every string reaching a report passes through
+  one function whose `kind` is keyword-only and exhaustive over a closed enum —
+  `authored`, `free`, `identifier`, `narrator`. Omitting the classification is a
+  type error, so a field cannot be added to a report without somebody saying
+  what class of string it is. (This replaced a three-way per-call-site choice
+  that leaked once per increment for four increments.)
+- **Never in an executable or attribute context.** Trace text appears only in
+  text nodes. The document contains exactly one `<script>` and one `<style>`,
+  both constants whose SHA-256 are checked in, and every attribute value is
+  drawn from an allowlist generated from the inputs. A `default-src 'none'` CSP
+  meta is the first thing in `<head>`.
+- **No external requests of any kind.** No URL of any scheme, no `<link>`,
+  `<img>`, `<iframe>`, `@import`, font or icon. A beacon in a shared report
+  would leak the *contents* of a trace, not just the fact of viewing it.
+
+### Redaction is a courtesy, not a boundary
+
+Trace-derived text is passed through a redactor that recognises AWS, Anthropic,
+OpenAI, GitHub, Slack and Google key shapes, JWTs, bearer headers, PEM private
+key blocks, and `NAME=value` assignments whose name contains a secret-ish word.
+Matches become `[redacted:<label>]`.
+
+**This reduces accidental exposure in a shared report. It cannot defeat an
+adversary who controls the trace and wants a secret rendered.** The report says
+so in its own header, and the spec says so too. The hard guarantee is
+`--no-previews`.
+
+### `--no-previews`, and the one thing it also changes
+
+`--no-previews` omits trace free text entirely. The text is dropped **at
+ingest**, not at render, so the hostile bytes do not exist in the process after
+ingestion rather than existing and being trusted not to leak. What survives is
+digests, counts, enumerated slugs and redacted join keys. This is the mode to
+use when sharing a report outside the team.
+
+> **Caveat, and it is not cosmetic: `--no-previews` changes which findings
+> exist.** The `unresolved_tool_call` detector decides its `unknown_tool` reason
+> by matching five phrases against a tool result's text — the one place in the
+> product where a detector reads trace free text. With the text gone at ingest,
+> that reason cannot fire, so a run that reports `critical=1` by default can
+> report `critical=0` under the flag. The flag's findings are a **subset** of
+> the default run's, never a superset. Read the report you are about to share
+> *and* the default one, and share the first while acting on the second. A fix
+> — computing that decision at ingest before the text is dropped — is queued
+> with the PM as spec flag **S27**; until it lands, this paragraph is the
+> warning.
+
+Identifiers are a second, smaller caveat: `agent_id`, `parent_agent_id`,
+`ParseWarning.detail` and `SpanError.code` are redacted in both modes but not
+blanked, because blanking a join key collapses the spans table, the lane legend
+and the per-agent cost table into one row each and merges distinct API errors.
+They therefore still carry attacker-chosen bytes under the flag, inside a
+constrained alphabet. Whether to render them as digests instead is an open
+question with the PM.
+
 ## The normalized trace model
 
 `swarm_observer/model/trace.py` is the contract between everything that
-produces a trace and everything that consumes one. Every model is a frozen
+produces a trace and everything that consumes one, documented in
+[`docs/TRACE-SCHEMA.md`](docs/TRACE-SCHEMA.md). Every model is a frozen
 pydantic v2 model with `extra="forbid"`, and the module deliberately does more
 than declare fields: orderings, length caps, and alphabets are expressed as
 validators, so a mapper bug fails at construction time instead of surfacing
-three layers later as a mis-rendered report. The safety properties the rest of
-the system relies on are enforced here and only here — span and agent ids are
-constrained to a closed alphabet, so they can never embed trace content and are
-therefore safe in an HTML attribute; parse-warning details are restricted to
-enumerated slugs, so a warning can never smuggle free text into output. The
-model carries its own `TRACE_SCHEMA_VERSION`, independent of any vendor format.
+three layers later as a mis-rendered report. The model carries its own
+`TRACE_SCHEMA_VERSION`, independent of any vendor format.
 
 ## Ingestion and the Claude Code adapter
 
@@ -61,77 +139,194 @@ anything, so the collapsed and naive constants are both pinned in tests.
 
 ## Detectors
 
-`swarm_observer/detect/` holds seven deterministic detectors behind a common
-protocol — repeated tool calls, agent loops, retry storms, failed and
-unresolved tool calls, blocked agents, and anomalous model calls. They are
-deterministic on purpose: the same trace produces the same findings, byte for
-byte, with no model in the loop and no scoring heuristics to tune. Each finding
-carries a severity, the spans it implicates, and an attribution of the model
-calls wasted, so the cost engine can answer "what did this problem cost" rather
-than only "what did the run cost". Detectors are registered rather than
-hard-wired, and `--detector <slug>` restricts a run to one.
+Seven deterministic detectors behind one protocol. The same trace produces the
+same findings, byte for byte, with no model in the loop and no scoring
+heuristics to tune. Each finding carries a severity, the spans it implicates,
+and an attribution of the model calls wasted, so the cost engine can answer
+"what did this problem cost" rather than only "what did the run cost".
+
+| slug | default | what it fires on |
+|---|---|---|
+| `repeated_tool_call` | warning | the same tool called with byte-identical arguments 2+ times; `critical` at 4+ |
+| `agent_loop` | warning | an agent's signature sequence repeating with period 1–8 three or more times; `critical` at 4+ |
+| `retry_storm` | warning | 3+ error spans inside a 10-span window for one agent; `critical` at 5+ |
+| `failed_tool_call` | info | a tool that returned an error at least once; `warning` at 2+ |
+| `unresolved_tool_call` | warning | a tool call with no result, an orphan result, or a call to a tool that does not exist (`critical`) |
+| `blocked_agent` | warning | an agent idle 60s+ with no other agent working through the gap; `critical` at 300s+ |
+| `anomalous_span` | warning | a model call more than 6 MADs above the lower median in tokens or duration; `critical` above 12 |
+
+`swarm-observer detectors` prints this list from the registry itself.
+`--detector <slug>` restricts a run; `--blocked-gap-seconds N` is the only
+threshold exposed as configuration, so a report is a function of the trace and
+one integer.
+
+`retry_storm` and `failed_tool_call` can both fire on the same spans, as can
+`agent_loop` and `repeated_tool_call`. The overlap is deliberate and is not
+deduplicated: a density signal and an existence signal are different
+information.
 
 ## Cost engine
 
-`swarm_observer/cost/` prices every model call from a bundled rate snapshot
-rather than a live pricing API, so a run is reproducible and needs no network.
-Rates resolve through a pinned four-rung ladder (exact key, alias, longest
-prefix, then unpriced), and the snapshot's loader refuses to accept a rate that
-carries no provenance — every one of the 17 model keys names its source and an
-as-of date. All money is `Decimal` end to end, with an `Inexact` trap that
-turns a silent rounding error into a loud failure. Anything unpriceable lands
-in an explicit taxonomy (`model_not_in_snapshot`, `rate_key_missing`, and
-friends) applied in a pinned priority order — nothing is ever silently dropped
-or quietly zeroed.
+`swarm_observer/cost/` prices every model call from a **bundled rate snapshot**
+rather than a live pricing API. Rates resolve through a pinned four-rung ladder
+(exact key, alias, longest prefix, then unpriced), and the snapshot's loader
+refuses a rate that carries no provenance — every model key names its source
+and an as-of date. All money is `Decimal` end to end, with an `Inexact` trap
+that turns a silent rounding error into a loud failure. Anything unpriceable
+lands in an explicit taxonomy (`model_not_in_snapshot`, `rate_key_missing`,
+`usage_missing`, `synthetic_span`) applied in a pinned priority order — nothing
+is ever silently dropped or quietly zeroed, and the count of unpriced calls
+sits beside the grand total so a trace on a retired model cannot look cheap.
 
-## Reporting and redaction
+**Costs are list-price estimates at the snapshot's date**, which both reports
+print next to every dollar figure. They exclude batch and priority tiers and
+any negotiated discount, they are not a billing reconciliation, and a trace is
+a *historical* artefact, so today's list price is already the wrong number for
+last month's run. The snapshot is a bundled file so that a report is
+reproducible and needs no network; the trade is that it goes stale, visibly,
+with a date attached. A live or historical-rate source in v2 is a new
+implementation of the existing `RateSource` protocol with no change to the cost
+engine.
 
-`swarm_observer/report/` renders the machine-readable JSON report today; the
-self-contained HTML report is the next increment. Between the trace and the
-report sits the redaction layer, which exists because trace content is
-attacker-influenced by definition — an agent may have processed hostile input,
-and whatever it saw is now in the transcript you are rendering. Redaction runs
-over every trace-derived field that reaches output, not only the obvious
-free-text previews, because the bugs found in this repo were precisely the ones
-where a credential-shaped string arrived through a field nobody had classified
-as free text. `--no-previews` drops trace free text at ingest rather than at
-render, so the text never enters the pipeline at all.
+Attributed waste is an **attribution, not a counterfactual**: it sums the usage
+of model calls the trace shows were repeated or discarded. It does not claim a
+deduplicated run would have cost that much less — a deduplicated run would have
+had different cache behaviour. Both reports say so in one sentence next to the
+number.
+
+## Reporting
+
+Two artefacts, from one command:
+
+- **`--json report.json`** — every span, every finding, all four cost
+  groupings, the unpriced list and the full parse-warning list, with
+  `sort_keys`, `ensure_ascii` and six-decimal money strings.
+- **`--out report.html`** — one self-contained file. All CSS and JS inline, no
+  build step, no server, no external request. Sections in a fixed order:
+  header, narrative (only with `--explain`), findings, timeline, cost, spans,
+  warnings. The timeline is inline SVG with integer-only geometry.
+
+At least one of the two is required. A run that names neither is a usage error,
+because a run that reports success without writing the file it was asked for is
+the failure the exit codes exist to prevent.
+
+## `--explain`: the optional narrator
+
+Off by default. With it on, swarm-observer asks a language model for one
+paragraph per finding group plus one overall paragraph, and renders them in a
+`<section id="narrative">` between the header and the findings.
+
+```bash
+pip install -e ".[explain]"
+export ANTHROPIC_API_KEY=...
+swarm-observer analyze <paths> --out report.html --explain
+```
+
+Four things about it are worth more than the feature:
+
+- **It is never shown the trace.** The request payload is built from findings
+  only and contains detector slugs, severities, integer metrics, per-severity
+  counts, per-agent and per-model token and cost totals, and the rate snapshot
+  version. No previews, no span text, no tool arguments, no tool results, no
+  file names, no paths, no `trace_id`, no agent ids, no recorded model ids, and
+  not even the one trace-derived metric the findings table is allowed to show.
+  That is enforced by the payload's **type**: every string in it is a literal, a
+  member of a closed vocabulary this package computed, or a pattern-constrained
+  money or key string, so a trace byte is not filtered out of the request — it
+  cannot be put in one. Pointing `--explain` at a provider therefore cannot
+  forward a secret that was sitting in a tool result.
+- **It cannot fail your run.** Each group falls back independently to a
+  deterministic template paragraph, marked with the class `narrative-fallback`
+  and the visible prefix `Deterministic summary:`. A transport failure, an auth
+  failure, a missing `anthropic` package, an absent API key, an invalid
+  paragraph and a timeout all take that path. **The exit code never changes**,
+  and `--explain` never turns a 0 into a 1.
+- **It is purely additive.** Strip `<section id="narrative">…</section>` from an
+  `--explain` report and the remaining bytes are identical to the same report
+  built without the flag. Nothing else in the document moves.
+- **Its output is untrusted.** A compromised or prompt-injected narrator is
+  just another attacker-influenced string source, so its paragraphs are
+  length-validated, rejected outright if they carry control characters, then
+  redacted and escaped exactly like trace text and confined to text nodes.
+
+With `--explain` absent, `swarm_observer.narrate` is never imported at all, so
+the default path cannot open a socket — not because nothing calls one, but
+because the code that could is never loaded.
 
 ## CLI
 
-`swarm_observer/cli/main.py` is the only module that wires adapters,
-detectors, the cost engine, and the renderers together — everything below it is
-independently importable. Exit codes are pinned and mean one thing each: `0`
-ran clean, `1` ran clean but a finding met the `--fail-on` threshold, `2`
-fail-closed on bad input, `3` usage error. That makes it usable as a CI gate:
-`--fail-on warning` turns a retry storm into a red build. `schema` prints the
-trace model's JSON Schema, and `detectors` prints every detector's slug,
-severity, and description.
+`swarm_observer/cli/main.py` is the only module that wires adapters, detectors,
+the cost engine, the narrator and the renderers together — everything below it
+is independently importable. Exit codes are pinned and mean one thing each:
+
+| code | meaning |
+|---|---|
+| `0` | ran, and no finding met `--fail-on` |
+| `1` | ran, and something did; both reports are still written |
+| `2` | fail-closed on input, parsing or rendering; one sanitized line on stderr, no output file written or truncated |
+| `3` | usage error — a bad flag, an unknown detector slug, an unwritable output directory |
+
+That makes it usable as a CI gate: `--fail-on warning` turns a retry storm into
+a red build. `schema` prints the trace model's JSON Schema, and `detectors`
+prints every detector's slug, severity and description.
 
 ## Design commitments
 
-- **Offline and credential-free.** The whole suite runs with no network and no
-  API keys. CI scrubs the credential environment to keep it that way.
+- **Offline and credential-free.** The whole suite runs with no network, no API
+  keys and `anthropic` not installed. CI scrubs the credential environment to
+  keep it that way, and the `[explain]` extra is never required.
 - **Deterministic.** Byte-identical output across repeat runs, subprocess
   boundaries, `PYTHONHASHSEED`, `TZ`, `LC_ALL`, working directory, input path
-  order, and both supported interpreters.
+  order, and both supported interpreters. No clock, no float, no absolute path,
+  no username and no unsorted iteration reaches a report; the provenance line
+  names the **trace's own** last timestamp, never the current time.
 - **Fail-closed.** Bad input is exit 2 with one sanitized line, never a
   traceback and never a half-written file.
 - **Untrusted input as the threat model.** Every trace-derived value is treated
-  as hostile until it has passed through the model's constraints and the
-  redactor.
+  as hostile until it has passed through the model's constraints, the
+  classifier and the redactor.
 - **Python 3.11 and 3.12.** CI runs both. Interpreter-dependent behavior —
   recursion limits, Unicode table versions, float formatting, dict ordering —
   is treated as a defect, because it has been one here before.
+
+## Not in v1
+
+Deliberately deferred, and the seams are written down so each is an addition
+rather than a redesign:
+
+- **Replay.** `swarm_observer/replay/target.py` declares a `ReplayTarget`
+  protocol and two frozen models, with no implementation, no subcommand and no
+  importer.
+- **Other trace formats.** `TraceSource` is the seam; an OTel or SDK source in
+  v2 is a new package under `ingest/` plus a registry entry.
+- **Live or historical pricing**, currency conversion, negotiated rates.
+  `RateSource` is the seam.
+- Live capture, an SDK, an exporter, or any in-process hook. Zero
+  instrumentation is the promise.
+- A server, a web UI, live tailing, `--watch`, or streaming analysis.
+- Storage, an index, or any state between runs. Nothing is written except the
+  two named files.
+- Cross-trace analysis: comparing runs, trend lines, baselines, "cost over the
+  last 30 days".
+- Finding suppression and `.swarm-observer-ignore`. `finding_id` is stable so
+  v2 can add them.
+- Statistical or LLM-based *detection*. Every detector is deterministic, and
+  `--explain` narrates findings — it never creates, ranks, suppresses or
+  modifies one.
+- PDF/Markdown/CSV output, theming, or configurable section order.
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest                  # 2093 tests, offline, ~35s
+pytest                  # 2565 tests, offline, no credentials, ~48s
 ruff check . && ruff format --check .
 mypy                    # strict
 ```
+
+The suite must pass with every provider credential unset and with `anthropic`
+not installed. If it passes only because something was installed, it is not
+testing what it claims to.
 
 ## Status
 
@@ -140,8 +335,8 @@ mypy                    # strict
 | 1 | Trace model, fail-closed ingestion, Claude Code adapter, suite-integrity harness | shipped |
 | 2 | Detectors and the fixture corpus | shipped |
 | 3 | Cost accounting and the JSON report | shipped |
-| 4 | Self-contained HTML report, SVG timeline, security and determinism probes | in progress |
-| 5 | LLM narrator, replay seam, docs | planned |
+| 4 | Self-contained HTML report, SVG timeline, security and determinism probes | shipped |
+| 5 | LLM narrator, replay seam, docs | in progress |
 
 ## How this was built
 
@@ -151,18 +346,23 @@ boundaries of a real engineering team. The coder cannot write tests. The tester
 cannot patch application code; a failing test becomes a bug report. The
 reviewer sees only the PR diff, and every fix it commits must land with a test
 that would have caught the bug. Specs, test reports, and reviews for every
-increment are preserved in [`docs/`](docs/) as the audit trail.
+increment are preserved in [`docs/`](docs/) as the audit trail, and
+[`docs/CASE-STUDY.md`](docs/CASE-STUDY.md) is the account of what the pipeline
+found and what it cost.
 
 The pipeline's most useful recurring finding is worth stating plainly: its
 characteristic defect is **a check that reports green while being structurally
 unable to fail** — a fixture set with no case that could trip it, an undeclared
 test dependency silently collecting zero tests, a guard that depends on an
 interpreter's recursion limit, a self-reported mutation score against a
-self-chosen mutation set. Eight instances have been caught so far. Several of
-the harnesses in `tests/` exist specifically to make that class of failure
-visible: a collection floor, a declared-skip ledger, a spec traceability map, a
-checked-in mutation ledger with a declared operator set, and canaries that
-prove each check can still fail.
+self-chosen mutation set, a hostile corpus that loaded four of the rendered
+fields as empty. Ten instances have been caught so far, every one of them by a
+different agent than the one that wrote it. Several of the harnesses in
+`tests/` exist specifically to make that class visible: a collection floor, a
+declared-skip ledger, a spec traceability map, a checked-in mutation ledger with
+a declared operator set, an AST scan for assertions no input can falsify, a
+model-derived sweep over every string field a report can render, and canaries
+that prove each check can still fail.
 
 ## License
 

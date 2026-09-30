@@ -1066,6 +1066,33 @@ class TestAnthropicAdapterR41:
         with pytest.raises(RuntimeError, match="reached client construction"):
             client.complete(_a_request())
 
+    @pytest.mark.parametrize("name", ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"])
+    def test_r45_either_credential_variable_on_its_own_is_a_credential(
+        self, name: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R45 (wave-7 ``V32``): both names R45 scrubs are both names the adapter reads.
+
+        The wave-7 survivor was ``CREDENTIAL_ENV_VARS`` shrunk to
+        ``("ANTHROPIC_API_KEY",)``: the control arm above sets element zero,
+        so dropping element one changed nothing any test looked at. R45 names
+        both variables and scrubs both, and a developer whose credential is in
+        ``ANTHROPIC_AUTH_TOKEN`` would have got ``no_credentials`` on a machine
+        that has one.
+
+        Each name is driven **alone**, with the other cleared, so the arm is
+        about that name and not about the pair.
+
+        Red when: a name is dropped from the tuple, or the check stops being a
+        disjunction.
+        """
+        for other in CREDENTIAL_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        client = AnthropicNarratorClient()
+        assert name in CREDENTIAL_ENV_VARS
+        assert client._credential_present() is False
+        monkeypatch.setenv(name, "not-a-real-key")
+        assert client._credential_present() is True
+
     def test_r42_the_prompt_is_a_constant_and_the_body_is_the_payload(self) -> None:
         """R42: "what AC12's sentinel test inspects is what goes on the wire"."""
         request = _a_request()
@@ -1126,6 +1153,127 @@ def _a_request() -> NarrationRequest:
     from .test_narrate_client_r41 import a_request
 
     return a_request()
+
+
+class TestWave7RenderGapsR43:
+    """R43: three wave-7 survivors in the narrative renderer, each a real gap.
+
+    Named by mutant so a future reader can find the sweep entry: ``V12`` and
+    ``V13`` in the section's note, ``V18`` and ``V45`` in the paragraph loop's
+    **fallback** branch.
+    """
+
+    def test_r43_the_section_note_counts_the_fallbacks_and_names_the_reasons(
+        self, tmp_path: Path
+    ) -> None:
+        """R43 (wave-7 ``V12``, ``V13``): the note above the paragraphs is unasserted.
+
+        Inverting ``if narrative.fallbacks:`` survived the whole suite, and so
+        did deleting the ``or "no reason recorded"`` default: every test
+        checked the paragraphs and none checked the sentence that tells a
+        reader **how many** of them the tool wrote and why. That sentence is
+        the only place a reader learns that the narrator was asked four times
+        and answered usefully twice.
+
+        Red when: the note stops being conditional on there being a fallback,
+        or stops naming the reasons, or stops reporting the call count.
+        """
+        narrative = Narrative(
+            paragraphs=(
+                NarrativeParagraph(
+                    group="overall",
+                    title="the whole run",
+                    text="the template",
+                    fallback=True,
+                    reason="timeout",
+                ),
+                NarrativeParagraph(
+                    group="agent_loop",
+                    title="the whole run",
+                    text="the model's prose",
+                    fallback=False,
+                ),
+            ),
+            calls=2,
+        )
+        with_fallback = analyze_paths(_sentinel_paths(tmp_path / "a"), narrative=narrative)
+        assert "1 of 2 paragraph(s) are swarm-observer's own" in with_fallback.html
+        assert "(timeout)" in with_fallback.html
+        # ...and no note at all when nothing fell back, which is the arm the
+        # guard-flip mutant needs in order to be observable.
+        clean = analyze_paths(
+            _sentinel_paths(tmp_path / "b"),
+            narrative=Narrative(paragraphs=(narrative.paragraphs[1],), calls=1),
+        )
+        assert "paragraph(s) are swarm-observer's own" not in clean.html
+
+    def test_r43_the_note_has_a_default_when_no_reason_was_recorded(self, tmp_path: Path) -> None:
+        """R43 (wave-7 ``V13``): the ``or`` default is reachable, so it is asserted.
+
+        A fallback with ``reason=None`` is what ``narrate`` produces for a
+        group it never asked about when no code was supplied. Without this
+        arm the default renders ``()`` and nothing notices.
+        """
+        analysis = analyze_paths(
+            _sentinel_paths(tmp_path),
+            narrative=Narrative(
+                paragraphs=(
+                    NarrativeParagraph(
+                        group="overall",
+                        title="the whole run",
+                        text="the template",
+                        fallback=True,
+                    ),
+                ),
+                calls=0,
+            ),
+        )
+        assert "(no reason recorded)" in analysis.html
+
+    @pytest.mark.parametrize("previews", [True, False])
+    def test_r43_a_fallback_paragraph_is_redacted_and_never_blanked(
+        self, previews: bool, tmp_path: Path
+    ) -> None:
+        """R43/A-e9 (wave-7 ``V18``, ``V45``): the fallback branch has its own writer.
+
+        Two survivors landed on the same line. The paragraph loop has two
+        branches and every test drove the **non**-fallback one, so the
+        fallback branch's ``kind`` was unpinned: it could be changed to
+        ``authored`` (no redaction, ``V18``) or to ``free`` (blanked under
+        ``--no-previews``, ``V45``) with the suite green.
+
+        Both matter. The renderer's own docstring says every paragraph is
+        written with the ``narrator`` kind "whether it is the model's or
+        swarm-observer's own template", precisely so a reader of the loop
+        does not have to know which is which — and A-e9's ruling that the
+        narrative survives ``--no-previews`` is about the section, not about
+        one of its two branches.
+
+        Red when: either branch stops using the ``narrator`` kind.
+        """
+        credential = R51_CREDENTIALS["aws_key_id"]
+        analysis = analyze_paths(
+            _sentinel_paths(tmp_path),
+            previews=previews,
+            narrative=Narrative(
+                paragraphs=(
+                    NarrativeParagraph(
+                        group="overall",
+                        title="the whole run",
+                        text=f"the template mentions {credential} and some prose",
+                        fallback=True,
+                        reason="timeout",
+                    ),
+                ),
+                calls=1,
+            ),
+        )
+        for document in (analysis.html, analysis.json):
+            assert credential not in document
+            assert "[redacted:aws_key_id]" in document
+            # ...not blanked: the surrounding words survive in both modes.
+            assert "the template mentions" in document
+            assert "and some prose" in document
 
 
 def _sentinel_paths(directory: Path) -> tuple[Path, ...]:

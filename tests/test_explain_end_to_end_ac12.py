@@ -564,3 +564,184 @@ class TestExplainDeterminismR47:
             main(["analyze", str(CLEAN), "--json", str(target), "--explain"], stdout=out)
             digests.add(hashlib.sha256(target.read_bytes()).hexdigest())
         assert len(digests) == 1
+
+
+class TestWave7CliExtractionR42:
+    """R42/S34/S38: what ``cli.main.build_narrative`` chooses to put in the payload.
+
+    **The increment-5 review's wave 7, and instance twelve of this project's
+    signature defect.** AC12's sentinel sweep and the independent-vocabulary
+    arm are the two checks whose declared job is "no string the payload
+    carries is unaccounted for". Both run over a payload the test module
+    builds with ``tests/sentinel_trace.totals_for`` -- a deliberate,
+    equality-asserted duplicate of the CLI's extraction -- and the equality
+    assertion covers ``NarrationRequest.totals`` only. Nothing looked at
+    ``rate_snapshot_version``, which is the one leaf whose value the CLI
+    chooses outright and one of the two the increment-5 tester named as
+    "clean by call-site discipline" (S38).
+
+    Wave-7 ``V43`` made ``build_narrative`` pass the literal
+    ``"not_the_snapshot_version"``. It reached the narrator's payload and the
+    rendered fallback paragraph -- "at rate snapshot
+    not_the_snapshot_version", in a document whose own header still printed
+    the real one -- and 2875 tests stayed green. The vocabulary arm would not
+    have caught it even had it seen that payload, because the string is a
+    lowercase slug and the arm allows any slug; that is exactly the
+    ``SHAPE_LEAVES`` hole the tester documented.
+
+    The class also closes the corpus gaps the sweep exposed: every
+    ``--explain`` test in the branch ran over the sentinel trace, which has
+    **one** agent and **zero** priced spans, so ``by_agent`` had a single row
+    whose ``agent_index`` and ``priced_spans`` were both ``0`` and
+    ``by_model`` was empty. Three mutants survived on that alone.
+    """
+
+    #: Four agents, seven priced spans and a resolvable model -- the opposite
+    #: of the sentinel trace in every dimension the payload's cost rows use.
+    MULTI_AGENT = FIXTURE_DIR / "gaps_explained.jsonl"
+
+    @staticmethod
+    def _captured_request(paths: Any) -> Any:
+        """One ``NarrationRequest`` as the **CLI** built it, not as a test would."""
+        captured: list[Any] = []
+
+        class Recorder:
+            def complete(self, request: Any) -> Any:
+                captured.append(request)
+                raise NarratorTransportError("timeout")
+
+        analysis = analyze_paths(paths)
+        build_narrative(
+            trace=analysis.trace,
+            findings=analysis.findings,
+            cost=analysis.cost,
+            client=Recorder(),
+        )
+        assert captured, "the narrator was never asked"
+        return analysis, captured[0]
+
+    def test_r42_the_cli_sends_the_snapshots_own_version(self) -> None:
+        """R42/S38 (wave-7 ``V43``): the payload's snapshot version has a provenance.
+
+        Compared against a **separately loaded** ``SnapshotRateSource``
+        rather than against the ``CostReport`` the same call already used, so
+        the arm is a statement about the bundled snapshot and not a tautology
+        over one object.
+
+        Red when: ``build_narrative`` passes anything but the loaded
+        snapshot's version -- which nothing else in the suite would notice,
+        because the leaf's only other guard is a 64-character alphabet.
+
+        The second arm is what makes the first one mean something. In the
+        bundled snapshot ``version`` and ``snapshot_date`` are the **same
+        string** (``2026-09-10``), so an equality against the real data cannot
+        tell "the CLI sends the version" from "the CLI sends the date" --
+        wave-7 ``V05`` swapped them and survives for that reason alone. So the
+        arm re-runs the extraction over a ``CostReport`` whose meta has been
+        given a version that differs from its date, where the two answers are
+        distinguishable.
+        """
+        from swarm_observer.cost.snapshot import SnapshotRateSource
+
+        analysis, request = self._captured_request([CLEAN])
+        expected = SnapshotRateSource().meta.version
+        assert request.rate_snapshot_version == expected
+        assert request.rate_snapshot_version == analysis.cost.meta.version
+        # And it is the version the document itself prints, so the narrative
+        # cannot attribute a run's costs to a snapshot the header denies.
+        assert f"rates {expected} of " in analysis.html
+
+        captured: list[Any] = []
+
+        class Recorder:
+            def complete(self, request: Any) -> Any:
+                captured.append(request)
+                raise NarratorTransportError("timeout")
+
+        distinct = analysis.cost.meta.model_copy(update={"version": "v7-review-probe"})
+        assert distinct.version != distinct.snapshot_date
+        build_narrative(
+            trace=analysis.trace,
+            findings=analysis.findings,
+            cost=analysis.cost.model_copy(update={"meta": distinct}),
+            client=Recorder(),
+        )
+        assert captured[0].rate_snapshot_version == "v7-review-probe"
+
+    def test_r42_the_payload_counts_the_traces_model_calls(self) -> None:
+        """R42 (wave-7 ``V03``): ``model_calls`` was asserted by nothing.
+
+        Inverting the span-kind test survived the suite. The figure is one of
+        the three the overall template prints, so a wrong one is a sentence a
+        reader would act on.
+
+        Red when: the count stops being the number of ``model_call`` spans.
+
+        Driven over ``gaps_explained.jsonl`` and not over ``clean_single_agent
+        .jsonl``, and the reason is the finding's own shape: the clean fixture
+        has five ``model_call`` spans and five of everything else, so
+        inverting the test is the identity on it. Half the corpus is like
+        that. The ``complement`` guard below is what stops a future edit
+        moving this arm back onto such a fixture.
+        """
+        analysis, request = self._captured_request([self.MULTI_AGENT])
+        spans = analysis.trace.spans
+        expected = sum(1 for span in spans if span.kind == "model_call")
+        complement = len(spans) - expected
+        assert expected > 0, "the fixture must have model calls for this to measure anything"
+        assert expected != complement, (
+            "the fixture must have unequal model_call and non-model_call counts, or "
+            "inverting the predicate is unobservable"
+        )
+        assert request.totals.model_calls == expected
+
+    def test_r42_every_agent_gets_a_row_indexed_by_its_own_index(self) -> None:
+        """R42/S34 (wave-7 ``V08``, ``V10``): a corpus with more than one agent.
+
+        Both survivors were the sentinel trace's shape rather than the code:
+        one agent means ``by_agent[:1]`` is the identity, and zero priced
+        spans mean ``agent_index`` and ``priced_spans`` are both ``0``, so
+        confusing the two is invisible. This drives a four-agent fixture,
+        which is the ninth-instance lesson applied to the payload: a sweep
+        over a corpus that loads one row is a sweep over one row.
+
+        Red when: the rows are truncated, or indexed by anything but
+        ``AgentCost.agent_index``.
+        """
+        analysis, request = self._captured_request([self.MULTI_AGENT])
+        rows = request.totals.by_agent
+        assert len(rows) == len(analysis.trace.agents) >= 4
+        assert [row.agent_index for row in rows] == [
+            row.agent_index for row in analysis.cost.by_agent
+        ]
+        assert [row.agent_index for row in rows] == sorted({row.agent_index for row in rows})
+        # ...and the index is distinguishable from every other integer on the
+        # row, so a call-argument swap cannot pass by coincidence.
+        assert any(row.agent_index != row.priced_spans for row in rows)
+        assert request.totals.agents == len(analysis.trace.agents)
+
+    def test_r42_the_payload_carries_a_real_snapshot_model_key(self) -> None:
+        """R42/S38: the ``model_key`` leaf, over a trace whose model resolves.
+
+        The sentinel corpus prices nothing, so ``by_model`` is empty there and
+        AC12's sweep of that leaf is a sweep of an empty tuple -- the
+        ninth-instance shape again. This is the arm that gives the leaf a
+        value: the key is one the **bundled snapshot** defines, never the
+        recorded ``Span.model`` (R30 calls that trace-derived), and the two
+        are different strings in this fixture.
+
+        Red when: the payload starts keying cost rows by a recorded model id.
+        """
+        from swarm_observer.cost.snapshot import SnapshotRateSource
+
+        analysis, request = self._captured_request([self.MULTI_AGENT])
+        keys = {row.model_key for row in request.totals.by_model}
+        assert keys, "the fixture must price something for this to measure anything"
+        assert keys <= set(SnapshotRateSource().model_keys())
+        assert request.totals.priced_spans > 0
+        assert request.totals.cost_usd != "0.000000"
+        recorded = {span.model for span in analysis.trace.spans if span.model}
+        assert recorded - keys, "the recorded model must differ from the snapshot key here"
+        blob = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+        for model in recorded:
+            assert model not in blob

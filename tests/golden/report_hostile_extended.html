@@ -180,10 +180,10 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 <div class="section-title"><h2>Findings</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <p class="caveat">Attributed waste sums the usage of model calls the trace shows were repeated or discarded. It is an attribution, not a counterfactual: a deduplicated run would have had different cache behaviour and would not have cost exactly this much less.</p>
 <div class="filters">
-<button class="filter" type="button" data-severity="all">all</button>
-<button class="filter" type="button" data-severity="critical">critical</button>
-<button class="filter" type="button" data-severity="warning">warning</button>
-<button class="filter" type="button" data-severity="info">info</button>
+<button class="filter" type="button" aria-pressed="true" data-severity="all">all</button>
+<button class="filter" type="button" aria-pressed="false" data-severity="critical">critical</button>
+<button class="filter" type="button" aria-pressed="false" data-severity="warning">warning</button>
+<button class="filter" type="button" aria-pressed="false" data-severity="info">info</button>
 </div>
 <article class="finding" id="unresolved_tool_call:73ed797ad9db" data-severity="critical" data-detector="unresolved_tool_call">
 <div class="finding-head"><span class="sev">critical</span><strong>unresolved_tool_call</strong><span>1 tool calls of one agent are unresolved (unknown_tool); first at span 4</span></div>
@@ -340,7 +340,9 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
       node.classList.toggle("hidden", !keep);
     });
     each(".filter", function (node) {
-      node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
+      var chosen = node.getAttribute("data-severity") === wanted;
+      node.classList.toggle("active", chosen);
+      node.setAttribute("aria-pressed", chosen ? "true" : "false");
     });
   }
   function setExpanded(section, expanded) {

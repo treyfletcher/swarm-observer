@@ -180,10 +180,10 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
 <div class="section-title"><h2>Findings</h2><button class="toggle" type="button" aria-expanded="true">hide</button></div>
 <p class="caveat">Attributed waste sums the usage of model calls the trace shows were repeated or discarded. It is an attribution, not a counterfactual: a deduplicated run would have had different cache behaviour and would not have cost exactly this much less.</p>
 <div class="filters">
-<button class="filter" type="button" data-severity="all">all</button>
-<button class="filter" type="button" data-severity="critical">critical</button>
-<button class="filter" type="button" data-severity="warning">warning</button>
-<button class="filter" type="button" data-severity="info">info</button>
+<button class="filter" type="button" aria-pressed="true" data-severity="all">all</button>
+<button class="filter" type="button" aria-pressed="false" data-severity="critical">critical</button>
+<button class="filter" type="button" aria-pressed="false" data-severity="warning">warning</button>
+<button class="filter" type="button" aria-pressed="false" data-severity="info">info</button>
 </div>
 <article class="finding" id="repeated_tool_call:be6ae0c74c84" data-severity="warning" data-detector="repeated_tool_call">
 <div class="finding-head"><span class="sev">warning</span><strong>repeated_tool_call</strong><span>one tool was called 2 times with identical arguments (spans 2-4)</span></div>
@@ -326,7 +326,9 @@ h3 { font-size: 14px; margin: 16px 0 4px; }
       node.classList.toggle("hidden", !keep);
     });
     each(".filter", function (node) {
-      node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
+      var chosen = node.getAttribute("data-severity") === wanted;
+      node.classList.toggle("active", chosen);
+      node.setAttribute("aria-pressed", chosen ? "true" : "false");
     });
   }
   function setExpanded(section, expanded) {

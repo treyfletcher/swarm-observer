@@ -42,7 +42,7 @@ TRACES = REPO / "tests" / "fixtures" / "traces"
 #: The minimum number of tests this tree must collect — this tree's copy of
 #: R49's collection floor, which lives in ``tests/collection_floor.json`` for
 #: the offline suite and cannot reach here. Raise it deliberately.
-COLLECTION_FLOOR = 21
+COLLECTION_FLOOR = 23
 
 
 @pytest.fixture(scope="session")

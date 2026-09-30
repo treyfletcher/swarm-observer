@@ -46,7 +46,7 @@ WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 #: The minimum number of ``test_`` functions the browser module must define.
 #: Parametrisation makes the collected count larger; this is the floor on the
 #: source, which is all the offline suite can see. Raise it deliberately.
-BROWSER_TEST_FLOOR = 11
+BROWSER_TEST_FLOOR = 13
 
 
 def _workflow_text() -> str:
@@ -233,7 +233,8 @@ class TestTheScriptStructure:
         assert 'closest(".section")' in REPORT_SCRIPT
         assert "parentNode" not in REPORT_SCRIPT
 
-    def test_the_control_state_is_written_by_the_handler(self) -> None:
-        """Red when: the ``aria-expanded`` write or the label flip is dropped (BUG-19)."""
+    def test_the_control_state_is_written_by_the_handlers(self) -> None:
+        """Red when: the ``aria`` writes are dropped (BUG-20)."""
         assert 'setAttribute("aria-expanded"' in REPORT_SCRIPT
+        assert 'setAttribute("aria-pressed"' in REPORT_SCRIPT
         assert "textContent" in REPORT_SCRIPT

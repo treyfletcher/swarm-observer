@@ -228,8 +228,8 @@ FORBIDDEN_SCRIPT_APIS: tuple[str, ...] = (
 #: ``tests_browser/`` executes them together in a real engine rather than
 #: reading either one's bytes.
 #:
-#: The handlers also write ``aria-expanded`` and the control's visible
-#: label. R34's prose says the script performs "only DOM class toggling,
+#: The handlers also write ``aria-expanded``/``aria-pressed`` and the control's
+#: visible label. R34's prose says the script performs "only DOM class toggling,
 #: filtering and sorting"; its enforced half is the list of sinks below, and
 #: neither ``setAttribute`` with a literal attribute name and a ``"true"``/
 #: ``"false"`` value nor ``textContent`` with a literal parses markup, reaches
@@ -257,7 +257,9 @@ REPORT_SCRIPT = """\
       node.classList.toggle("hidden", !keep);
     });
     each(".filter", function (node) {
-      node.classList.toggle("active", node.getAttribute("data-severity") === wanted);
+      var chosen = node.getAttribute("data-severity") === wanted;
+      node.classList.toggle("active", chosen);
+      node.setAttribute("aria-pressed", chosen ? "true" : "false");
     });
   }
   function setExpanded(section, expanded) {
@@ -425,13 +427,19 @@ def sha256_of(text: str) -> str:
 #: above but against the ``<script>`` element **as parsed out of the rendered
 #: document**, which is what proves nothing was interpolated at render time.
 #:
-#: Moved once, by the increment-5 post-review, for BUG-19: the collapse
-#: handler's root changed from ``parentNode`` to ``closest(".section")`` and it
-#: now writes the control's state. Previous value:
-#: ``17e03dec80b6d0255ef1f1b3db2ec39ce4903a9e742833c0e0a76c03f348dffb``.
-#: :data:`STYLE_SHA256` did **not** move — the stylesheet was always right; it
-#: was the script that disagreed with it.
-SCRIPT_SHA256 = "caf9f8b6ece9945634499157cc515c9b2b5f4840a6b5f18221c7b879da228ab8"
+#: Moved twice by the increment-5 post-review, once per defect, so that each
+#: move has one reason next to it:
+#:
+#: * ``17e03dec80b6d0255ef1f1b3db2ec39ce4903a9e742833c0e0a76c03f348dffb`` →
+#:   ``caf9f8b6ece9945634499157cc515c9b2b5f4840a6b5f18221c7b879da228ab8``
+#:   (BUG-19): the collapse root became ``closest(".section")`` and the handler
+#:   began writing ``aria-expanded`` and the control's label.
+#: * ``caf9f8b6…`` → the value below (BUG-20): the severity filters began
+#:   writing ``aria-pressed``.
+#:
+#: :data:`STYLE_SHA256` did **not** move in either: the stylesheet was always
+#: right; it was the script that disagreed with it.
+SCRIPT_SHA256 = "469fb5045a6c82e1b69a86225da85939d9fab1d982e8572ddc36c28b88344c31"
 
 #: R34: the pinned digest of :data:`REPORT_STYLE`. See :data:`SCRIPT_SHA256`.
 STYLE_SHA256 = "97b30480f4024d9a5bfc298962a7d9e9c51e09081e2d4ae666d9f676d82ffa11"
@@ -540,12 +548,13 @@ def attribute_allowlist(
         "type": frozenset({"button"}),
         "role": frozenset({"img"}),
         "aria-label": frozenset({"execution timeline"}),
-        # BUG-19, increment-5 post-review: the collapse control reports its
-        # state. Both values are literals the script may also write at runtime
-        # (see :data:`REPORT_SCRIPT`), so the allowlist has to admit the pair
-        # rather than the rendered initial value alone — a browser test
+        # BUG-20, increment-5 post-review: ten buttons exposed neither their
+        # state nor a name. Both values are literals the script may also write
+        # at runtime (see :data:`REPORT_SCRIPT`), so the allowlist has to admit
+        # the pair rather than the rendered initial value alone — a browser test
         # re-checks the live DOM against this list after every control is used.
         "aria-expanded": frozenset({"true", "false"}),
+        "aria-pressed": frozenset({"true", "false"}),
         "data-severity": frozenset(set(SEVERITIES) | {ALL_SEVERITIES}),
         "data-detector": frozenset(DETECTOR_SLUGS),
         "data-agent": frozenset({_n(agent.agent_index) for agent in trace.agents}),
@@ -729,12 +738,12 @@ def _findings_section(
     body: list[str] = [
         f'<p class="caveat">{w(WASTE_CAVEAT, kind=KIND_AUTHORED)}</p>',
         '<div class="filters">',
-        f'<button class="filter" type="button" '
+        f'<button class="filter" type="button" aria-pressed="true" '
         f'data-severity="{w(ALL_SEVERITIES, kind=KIND_AUTHORED)}">all</button>',
     ]
     for severity in reversed(SEVERITIES):
         body.append(
-            f'<button class="filter" type="button" '
+            f'<button class="filter" type="button" aria-pressed="false" '
             f'data-severity="{w(severity, kind=KIND_AUTHORED)}">'
             f"{w(severity, kind=KIND_AUTHORED)}</button>"
         )

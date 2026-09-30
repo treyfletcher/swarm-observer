@@ -168,11 +168,11 @@ class TestSectionCollapseR34:
 class TestControlStateIsAnnouncedR34:
     """The increment-5 browser review's accessibility finding, pinned.
 
-    Six collapse controls carried no ``aria-expanded``, so a screen reader was
-    told a button existed and nothing about what it did or what state it was in.
-    The visible label is part of the answer too: a control that always reads
-    ``hide`` is wrong half the time. (The four severity filters are the other
-    half of the finding and are handled in the commit after this one.)
+    Ten buttons — six collapse controls and four severity filters — carried no
+    ``aria-expanded``, ``aria-pressed`` or ``aria-label``, so a screen reader
+    was told a button existed and nothing about what it did or what state it was
+    in. The visible label is now part of the answer too: a control that always
+    reads ``hide`` is wrong half the time.
     """
 
     def test_the_collapse_control_label_alternates(self, page: Page) -> None:
@@ -192,6 +192,24 @@ class TestControlStateIsAnnouncedR34:
             assert probe(page, section_id)["expanded"] == "false", section_id
             toggle(page, section_id)
             assert probe(page, section_id)["expanded"] == "true", section_id
+
+    def test_every_button_in_the_document_exposes_its_state_or_its_name(self, page: Page) -> None:
+        """The finding as counted in the browser: ten buttons, none of them annotated."""
+        buttons: list[dict[str, Any]] = page.evaluate(
+            """() => Array.from(document.querySelectorAll("button")).map((node) => ({
+                text: node.textContent,
+                pressed: node.getAttribute("aria-pressed"),
+                expanded: node.getAttribute("aria-expanded"),
+                label: node.getAttribute("aria-label"),
+            }))"""
+        )
+        assert len(buttons) == 10, buttons
+        bare = [
+            button
+            for button in buttons
+            if button["pressed"] is None and button["expanded"] is None and button["label"] is None
+        ]
+        assert not bare, bare
 
 
 class TestR34HoldsAfterTheScriptHasRun:
@@ -222,6 +240,7 @@ class TestR34HoldsAfterTheScriptHasRun:
             "role",
             "aria-label",
             "aria-expanded",
+            "aria-pressed",
             "data-severity",
             "data-detector",
             "data-agent",
@@ -307,9 +326,20 @@ class TestR34HoldsAfterTheScriptHasRun:
 class TestSeverityFilterR34:
     """The filter half of the one script — no regression, and its state exposed.
 
-    The increment-5 browser session found the filtering itself correct. It is
-    pinned here so that nothing done to the script for BUG-19 breaks it.
+    The increment-5 browser session found the filtering itself correct and the
+    ``active`` class moving rather than accumulating. Those properties are
+    pinned here so the ``aria-pressed`` addition cannot quietly break them.
     """
+
+    def _states(self, page: Page) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = page.evaluate(
+            """() => Array.from(document.querySelectorAll(".filter")).map((node) => ({
+                severity: node.getAttribute("data-severity"),
+                active: node.classList.contains("active"),
+                pressed: node.getAttribute("aria-pressed"),
+            }))"""
+        )
+        return result
 
     def test_filtering_shows_only_the_wanted_severity(self, page: Page) -> None:
         """Red when: the filter stops hiding, or hides the wrong findings."""
@@ -324,3 +354,14 @@ class TestSeverityFilterR34:
                 assert len(shown) >= 1
             else:
                 assert set(shown) <= {severity}, (severity, shown)
+
+    def test_exactly_one_filter_is_active_and_pressed_at_a_time(self, page: Page) -> None:
+        """Red when: ``active`` accumulates, or ``aria-pressed`` stops tracking it."""
+        for severity in ("all", "info", "warning", "critical", "all"):
+            page.click(f'.filter[data-severity="{severity}"]')
+            states = self._states(page)
+            assert [state["severity"] for state in states if state["active"]] == [severity]
+            assert [state["severity"] for state in states if state["pressed"] == "true"] == [
+                severity
+            ]
+            assert all(state["pressed"] in {"true", "false"} for state in states), states

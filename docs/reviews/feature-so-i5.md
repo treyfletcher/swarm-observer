@@ -4,6 +4,15 @@
 the last increment of v1, so the merge verdict is also a release verdict, and
 that one is in §11: **tag it, with four things written down.**
 
+> **§13 was added after this review shipped.** A defect was then found in the
+> rendered report *in a real browser* — instance thirteen, and the first one no
+> test in this repository could have caught, because nothing here executed
+> JavaScript. Two more `review:` commits (`56abead`, `4eee41b`), a browser suite
+> that runs in CI, and a revised status table live in
+> [§13](#13-post-review-the-browser-check). The verdict does not change; §11's
+> third open item is discharged in part. Read §13 before acting on the status
+> table below, which is as of `75fac82`.
+
 Scope: `git diff feature/so-i4...feature/so-i5`, plus my own commits on top.
 Binding on me: `docs/reviews/feature-so-i4.md` (C1–C7, S24–S32) and the
 increment-3 review through it.
@@ -708,3 +717,395 @@ exists. The contract is what will find it.
 | `96db54e` | `review(R49, R50; AC14)`: the two suite-integrity hooks get the canaries AC14 requires |
 
 Each carries its pinning test in the same commit. No commit edits the spec.
+
+Two more were added after this review shipped, for the browser defect — see §13:
+
+| | |
+| --- | --- |
+| `56abead` | `review(R34; BUG-19)`: the collapse control marked the title row, not the section |
+| `4eee41b` | `review(R34; BUG-20)`: the ten buttons told a screen reader nothing |
+
+Same rule: each lands with a test that fails against its parent, and neither
+edits the spec — the one R34 tension they raise is ruled in §13.4 instead.
+
+---
+
+## 13. Post-review: the browser check
+
+Written after the merge verdict above, against `feature/so-i5` at `75fac82`.
+§11 listed "the browser check" as knowingly open: *nothing in this repository
+has ever been opened in a browser*. Somebody then opened one. This section is
+what came back, what I did about it, and whether §11's verdict survives.
+
+### 13.1 The defect — BUG-19
+
+`REPORT_SCRIPT` wired the six section collapse controls like this:
+
+```js
+each(".toggle", function (node) {
+  node.addEventListener("click", function (event) {
+    event.currentTarget.parentNode.classList.toggle("collapsed");
+  });
+});
+```
+
+The button's `parentNode` is `div.section-title` — the heading row — not the
+`<section>`. The stylesheet's rule is:
+
+```css
+.collapsed > *:not(.section-title) { display: none; }
+```
+
+That rule's `:not` clause only means anything if the element carrying
+`collapsed` is the one that *has* a `.section-title` child. It was not. So
+`collapsed` landed on the title div and the rule hid **that div's** children:
+the `<h2>` and the toggle button itself.
+
+Reproduced in Chromium on a report generated from `tests/fixtures/traces/`.
+Clicking "hide" on any section removed the section's heading **and its own
+control**, left every row of content on the page, and could not be undone
+without a reload. All six behaved identically. The label never changed from
+`hide`.
+`document.querySelectorAll('[hidden], .hidden, [style*="display:none"]')`
+returned **0** after clicking all six; page height dropped 26px per click — one
+heading row, not a section.
+
+**Root cause** is a disagreement between two constants that no check compared:
+the script's idea of the collapse root and the stylesheet's. Each is
+individually correct-looking. Only cascading one over the other decides it.
+
+Severity: not a security defect. Nothing leaks, nothing executes, the CSP is
+untouched, R32/R33/R34/R35/R51 all still hold — verified again in the browser
+(§13.6). It is a *correctness* defect in the one interactive feature the report
+has, and the failure mode is unusually bad for a reader: the control deletes the
+section's label and then deletes itself.
+
+### 13.2 Why nothing caught it — instance thirteen
+
+Every check in this repository parses the **static** document. There is no
+Playwright, no jsdom, no JS engine anywhere in `tests/` or in CI. `REPORT_SCRIPT`
+is a constant guarded by a pinned SHA-256 (R34), and that pin is doing exactly
+what it was built to do — prove no byte was interpolated at render time. What it
+was never able to do, and was never claimed to do, is say whether the bytes
+work. It is a constant that had never been executed.
+
+This is **instance thirteen** of the signature defect: a check reporting green
+while structurally unable to fail. §11 predicted instance thirteen existed and
+said the harness contract was what would find it. The harness contract did not
+find this one. A human with a browser did, in an afternoon, in the one area the
+contract has no reach over — because the contract governs how *Python tests* are
+designed and there were no tests of this kind at all.
+
+That is worth stating plainly, because it is the most useful thing in this
+section: **the contract can only discipline checks that exist.** Twelve of the
+thirteen instances were a check that could not fail. This one was a whole
+*class* of behaviour with no check at all, hidden behind a check of a different
+class that looked like it covered the area. The SHA-256 pin did not merely fail
+to catch it — it made the area *look* covered, which is worse than an obvious
+gap. R34's own docstring says so, in a sentence written before any of this:
+"The assertion that matters is not this constant against the constant above but
+against the `<script>` element as parsed out of the rendered document." Both
+assertions are about bytes. Neither is about behaviour.
+
+### 13.3 The ruling: how this gets tested
+
+The trap here is instance three — "a live path that could never have passed".
+A browser test behind an opt-in marker that CI deselects is that instance with a
+new name, and the next reviewer would be right to find it. So the acceptance bar
+I set myself was: **it must run in CI, it must fail against the shipped script,
+and I must show the red, not assert it.**
+
+I weighed three options.
+
+**Option 1 — a real browser job in CI. Adopted.** `tests_browser/` is a second
+top-level test tree with its own CI job that installs Chromium and runs the tree
+in full, deselecting nothing.
+
+**Option 2 — a headless JS+DOM engine in-process. Rejected, honestly.** There is
+no maintained pip-installable jsdom equivalent for Python. A JS engine
+(`quickjs`, `mini-racer`) plus a hand-written DOM shim would have caught *the
+class-placement half* of this bug, because "which element got `collapsed`" is a
+DOM question. It would **not** have caught the bug as a reader experiences it,
+because the harm comes from `.collapsed > *:not(.section-title)` — and no shim I
+would be willing to write implements the cascade, `:not()`, or
+`getComputedStyle` against a real stylesheet. Per the bar I set, a mechanism
+that would not have caught *this* bug does not count. It would also have meant
+shipping a test-only reimplementation of the thing under test, which is the
+same failure in a third costume: a check that agrees with itself.
+
+**Option 3 — a structural static assertion**, e.g. asserting `REPORT_SCRIPT`
+contains `closest(".section")`. **Adopted as a secondary, and labelled as the
+weak check it is.** It lives in
+`tests/test_browser_suite_wiring.py::TestTheScriptStructure` with a docstring
+that says, in the file: this is a constant asserting something about another
+constant; it cannot tell you the collapse works; if the browser job ever
+disappears it will keep passing while the feature is broken, exactly as the
+SHA-256 pin did. It is kept for one narrow reason — it names the root cause
+where the next person editing the script will be standing — and for no other.
+It is not evidence and this review does not treat it as evidence.
+
+**Why a separate tree rather than a marker.** This is the part that matters, and
+it is forced by two rules that were already in the spec:
+
+* **R45** pins that the entire `tests/` suite passes offline with only `.[dev]`
+  installed. A module-scope `import playwright` in `tests/` breaks that job.
+* **R49** forbids `pytest.importorskip` and `skipif` for optional test
+  dependencies, precisely so a missing one is a collection error rather than a
+  skip nobody counts.
+
+Together those two forbid the obvious arrangement. A marker plus a CI `-m "not
+browser"` is available but is `live_narrator`'s shape *without*
+`live_narrator`'s justification: `live_narrator` is tolerable only because it
+sends a real request to a provider, which CI must not do, **and** because a
+separate test asserts the deselected count is non-zero. A browser test has no
+such excuse — CI can run a browser — so deselecting it would be a choice to not
+run it.
+
+A second tree costs one more CI job and one more conftest. It buys: no marker,
+no skip, no `importorskip`, nothing deselected on either side, and `tests/`
+keeps meaning exactly what R45 says it means.
+
+**The seam.** The offline suite cannot run the browser tree, so it would not
+notice if the tree were emptied or the job removed —
+"a check that stopped running and nobody noticed" is the same defect again.
+`tests/test_browser_suite_wiring.py` (14 tests) closes that from the offline
+side: the tree exists and still defines the BUG-19 assertions *by name*; the
+workflow has a `browser` job; that job installs Chromium; its pytest invocation
+carries no `-m`, `-k`, `--ignore` or `--deselect`; the offline job does **not**
+name `tests_browser`; `testpaths = ["tests"]` keeps a bare `pytest` from
+collecting it; and the browser tree contains no `skipif`, `importorskip`,
+`skip`, `xfail` or `pytest.mark.browser` — checked over the **AST**, not the
+bytes, because those modules discuss the escape hatches at length and a
+substring scan would be red on the prose explaining their absence.
+
+`tests_browser/conftest.py` carries this tree's own copy of R49's two hooks: a
+collection floor (23) and a terminal-summary hook that fails the session on
+**any** skip, with no allowlist to consult.
+
+**Honest tradeoffs, stated for the record.**
+
+1. It adds a non-Python dependency to a repo whose whole posture is
+   offline-and-hermetic. My reading: R45's "offline" is a property of the
+   *suite* — no network at test time — not of the *install*. CI already
+   downloads packages from PyPI; `playwright install chromium` is the same kind
+   of step, and the page under test is a `file://` URL with no network of its
+   own (R35, separately proved offline). The browser job also asserts
+   `anthropic` is absent, so R45's other clause is not weakened there either.
+2. It is slower and it is the first thing in this repo that can fail for
+   environmental reasons — a browser that will not launch. That failure is
+   **loud** (an error, never a skip), which is the correct trade under R49.
+3. **The offline suite is still the weaker signal about this feature, and it
+   always will be.** If someone deletes the `browser` job, the wiring tests go
+   red; if someone deletes the wiring tests *and* the job in one commit, nothing
+   in `tests/` notices. There is no arrangement that closes that, short of
+   putting Playwright in `[dev]` and breaking R45. This is a documented residual
+   risk, not a solved problem.
+
+**Red before green, demonstrated.** Against `75fac82` the final 23-test tree
+reports **21 failed, 2 passed**; against `4eee41b`, **23 passed**. Per commit:
+
+| | browser tree vs. its parent | vs. itself |
+| --- | --- | --- |
+| `56abead` (BUG-19) | 19 failed, 2 passed | 21 passed |
+| `4eee41b` (BUG-20) | 2 failed, 21 passed | 23 passed |
+
+The two that pass against the shipped script are the baseline ("every section
+opens expanded with content on the page" — the assertion that keeps "collapsing
+hid the content" from being vacuously true) and "filtering shows only the wanted
+severity", which was already correct.
+
+### 13.4 The fix
+
+`closest(".section")` names the collapse root the stylesheet already assumed.
+The handler also flips the label between `hide` and `show` and writes
+`aria-expanded`:
+
+```js
+function setExpanded(section, expanded) {
+  var button = section.querySelector(".section-title .toggle");
+  section.classList.toggle("collapsed", !expanded);
+  button.setAttribute("aria-expanded", expanded ? "true" : "false");
+  button.textContent = expanded ? "hide" : "show";
+}
+```
+
+I ruled the label *in scope* rather than cosmetic: a control that reads `hide`
+when the section is already hidden is wrong half the time, and it was wrong half
+the time only because the section never actually collapsed — the label and the
+bug are the same omission.
+
+**Ruling on R34 (spec tension, not a spec edit).** R34's prose says the one
+script performs "only DOM class toggling, filtering and sorting over nodes
+already present". `setAttribute` and `textContent` are outside those three
+verbs. R34's *enforced* half is the list of sinks — `innerHTML`, `outerHTML`,
+`insertAdjacentHTML`, `document.write`, `eval`, `Function`, string
+`setTimeout`/`setInterval`, `fetch`, `XMLHttpRequest`, `WebSocket`, `import()` —
+and the property those protect is that no byte is parsed as markup and nothing
+reaches the network. `setAttribute` with a literal attribute name and a
+`"true"`/`"false"` literal, and `textContent` with a literal, do neither. I rule
+them inside R34's intent. **The spec is not edited**; this paragraph is the
+ruling, and the same reasoning is in `report/html.py` beside the script. If the
+PM disagrees, the alternative is a CSS-only label (two spans, one hidden) and
+dropping `aria-expanded` entirely, which trades an accessibility property for a
+narrower reading of three words.
+
+The ruling is not taken on trust. Because the script now writes attributes
+*after* load, `tests_browser/` re-checks **the live DOM** once every control has
+been exercised: no attribute name outside R34's declared set, no `<`, `>`, `"`,
+`'` or backtick in any value, and still exactly one `<script>`, one `<style>`,
+zero iframes, zero images and not one new element. Those are R34's own
+guarantees, asserted for the first time against the document a reader is
+interacting with rather than the one on disk.
+
+### 13.5 The two lesser findings
+
+**BUG-20 — ten buttons exposed no state. Fixed.** Six collapse controls and four
+severity filters carried no `aria-pressed`, `aria-expanded` or `aria-label`.
+Filter state and collapse state were carried by a `class` and a background
+colour, so a screen-reader user was told a button existed and nothing else. The
+`active` filter is the document's only indication of *what the findings list is
+currently showing*, and it was invisible.
+
+I fixed it rather than filing it, for two reasons. It is one line in each
+handler and one attribute in each element, so the cost is near zero. And R34's
+allowlist made it a decision that had to be taken now either way: `aria-expanded`
+was already required by the BUG-19 fix, and shipping half of a two-attribute
+pattern would have left the next person to add the other half re-deriving this
+whole ruling. `attribute_allowlist` gains `aria-expanded` and `aria-pressed`,
+each as the **pair** `{"true", "false"}` rather than the rendered initial value,
+because the script writes the other at runtime and the allowlist is a statement
+about what the document may hold, not about the bytes on disk. The tester's
+independent `ATTRIBUTE_SHAPES` table gains the same two, written from R34's
+prose as that table requires.
+
+What this does **not** do: it is not an accessibility audit. Colour contrast,
+focus order, the `sev` chips' colour-only severity encoding, and the 5,000-row
+table's usability are all untouched and unexamined. This closes the one finding
+that came back from the browser, at the level it was reported.
+
+**The SVG timeline has no axis and no lane labels. Ruled intentional, not
+fixed.** The reader must consult the table immediately above the figure to know
+which lane is which agent. I rule this **a deliberate design decision that is
+load-bearing, not an oversight** — a stronger ruling than "R37 is silent", and
+the reason is in `_timeline_section`'s docstring, written by the coder:
+
+> The legend is HTML and the figure is SVG, and that split is the point: agent
+> ids are trace-derived, so they are rendered as text nodes beside the figure
+> and no trace-derived byte enters the `<svg>` at all.
+
+Putting lane labels inside the figure would put attacker-influenced strings
+inside the one element R34 currently guarantees is free of them, and would widen
+`attribute_allowlist`'s exact `x`/`y` value sets with a second family of
+coordinates. R37 pins geometry — integer-only, one lane per agent by
+`agent_index`, fill by fixed CSS class — and says nothing about an axis or
+in-figure text, so neither is owed in v1. The figure carries `role="img"` and
+`aria-label="execution timeline"`, and the lane → agent-index → agent-id mapping
+is a real HTML table directly above it, which is the accessible form.
+
+A **time axis** is a genuine usability gap and is a v1.1 item: the `note` above
+the figure states the span in milliseconds, so the scale is stated but not
+drawn. It would need new geometry values in R34's allowlist and tick text with
+integer positions; that is a design task, not a bug fix, and it does not belong
+in a targeted post-review pass on a branch with an open PR.
+
+### 13.6 What CI now runs
+
+| job | interpreter | what it runs |
+| --- | --- | --- |
+| `test` (matrix) | 3.11, 3.12 | `pytest -m "not live_narrator"`, credentials scrubbed, `anthropic` absent, coverage. **Unchanged** — 2921 tests, up from 2907 by the 14 wiring tests. |
+| `browser` (new) | 3.12 | installs `.[dev]`, then Playwright + Chromium; asserts `anthropic` absent; runs `pytest tests_browser` **in full**, credentials scrubbed, nothing deselected. 23 tests. |
+
+The browser job's pytest line carries no marker expression by design, and
+`test_the_browser_job_deselects_nothing` fails the offline suite if one appears.
+
+Final status at `4eee41b`, both interpreters — this supersedes the table at the
+top of this document:
+
+| | CPython 3.11.15 | CPython 3.12.3 |
+| --- | --- | --- |
+| full offline suite | 2921 passed, 1 xfailed | 2921 passed, 1 xfailed |
+| R45 scrubbed, `anthropic` absent, `-m "not live_narrator"` | 2920 passed, 1 deselected, 1 xfailed | 2920 passed, 1 deselected, 1 xfailed |
+| `tests_browser` (Chromium) | 23 passed | not run in CI (3.12 job only) |
+| `ruff check` / `ruff format --check` | pass / 108 formatted | pass / 108 formatted |
+| `mypy --strict` | 44 files, clean | 44 files, clean |
+
+The xfail is unchanged: S16's identifier-under-`--no-previews` gap, which is the
+PM's and is deliberate. The +14 offline tests are
+`tests/test_browser_suite_wiring.py`; the browser tree is not counted in the
+offline totals because the offline job does not collect it, which is the whole
+arrangement described in §13.3. `TestScaleR13` flakes under container load at
+this revision and at `75fac82` alike — see §13.9.
+
+### 13.7 Pins moved
+
+| pin | from | to | why |
+| --- | --- | --- | --- |
+| `SCRIPT_SHA256` | `17e03dec…f348dffb` | `caf9f8b6…da228ab8` | BUG-19: collapse root, label, `aria-expanded` |
+| `SCRIPT_SHA256` | `caf9f8b6…da228ab8` | `469fb504…88344c31` | BUG-20: filters write `aria-pressed` |
+| `tests/golden/report_hostile_extended.html` | — | regenerated ×2 | R43/AC12 byte identity; `python3 -m tests.golden.regenerate` |
+| `tests/golden/report_hostile_extended_no_previews.html` | — | regenerated ×2 | same |
+| `tests/collection_floor.json` | — | `+tests/test_browser_suite_wiring.py: 14` | R49/A11 |
+
+Moved deliberately, one move per defect, so each has one reason beside it in
+`report/html.py`. **`STYLE_SHA256` did not move in either commit** and that is
+the point worth keeping: the stylesheet was correct from increment 4; the script
+disagreed with it. A reader of the two pins should be able to see that the fix
+was on the script side, and now they can.
+
+### 13.8 A note on the numbering
+
+The increment-5 review already used BUG-16 (narrative title classification) and
+BUG-17 (§5's correction), and BUG-18 is the tester's coverage finding. The two
+defects here are therefore **BUG-19** and **BUG-20**.
+
+### 13.9 One thing I did not fix
+
+`tests/test_detector_adversarial.py::TestScaleR13` flakes under load. Its ratio
+arm is `large < max(small, NOISE_FLOOR) * 8.0` over sub-second wall-clock
+measurements; in a busy 2-core container it fails roughly once per eight
+full-suite runs, on a different member each time (observed: 0.673s against a
+0.667s budget). **It flakes identically at `75fac82`** — I ran the base commit's
+full suite eight times to check before attributing it to my change, and ran the
+class alone at both revisions six times in alternation, where both are stable at
+~2.4s. It is pre-existing, environmental, and out of scope here.
+
+It is worth one sentence in this review because it is the *mirror* of the
+project's signature defect rather than another instance of it: a check that can
+report red without a defect, where the other thirteen reported green without
+being able to find one. A wall-clock budget is a check whose verdict depends on
+the machine. The absolute arm (`large < 2.0`) is the one that would catch a
+reintroduced quadratic; the 8× ratio arm is what flakes. Recommendation for
+v1.1: keep the absolute bound, raise the ratio multiplier or drop that arm. Not
+mine to change in a targeted pass.
+
+### 13.10 Does the release verdict change?
+
+**No. Still merge, still tag v1** — and with less hand-waving than §11 had.
+
+What changed, and why it does not change the verdict:
+
+* The defect is a correctness bug in one interactive control, found before
+  release, fixed with a test that fails against the shipped code. That is the
+  process working, one step later than anyone would like.
+* **No security property moved.** The browser session that found this also
+  confirmed, on the hostile fixture, in Chromium: zero credentials in the DOM or
+  in rendered text (AWS, Anthropic, OpenAI, GitHub PAT, PEM); redaction markers
+  render visibly as `[redacted:aws_key_id]`; exactly one `<script>`, zero
+  iframes, zero images, zero `on*` attributes; `javascript:alert(1)` and
+  `data:text/html;base64,…` payloads render as inert escaped text; **zero
+  external requests** (one `GET file://` for the document itself); zero console
+  output; zero page errors; section order matches R36; the severity filters
+  filter correctly and `active` moves rather than accumulating. Every one of
+  those was previously asserted only against a parsed DOM. They now have their
+  first independent confirmation, and they all held.
+* §11's third open item — "nothing in this repository has ever been opened in a
+  browser" — is **discharged in part**. A browser now runs in CI on every PR and
+  asserts the collapse, the filters, the button semantics and R34's live-DOM
+  guarantees. What is still not checked by anything: CSP enforcement as the
+  browser applies it, rendering at a 5,000-row scale, print, colour contrast,
+  focus order, and any browser that is not Chromium. That list should replace
+  item 3 in §11 rather than being deleted from it.
+
+What I would say to the PM, in one line: the check that found this cost an
+afternoon with a browser, and it found a defect that five increments of static
+assertions could not. **The next such gap is not in the Python.**

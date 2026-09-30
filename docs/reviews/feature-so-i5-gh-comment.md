@@ -1,25 +1,38 @@
-## ✅ Merge — and tag v1
+## 🔴 Found in a browser: the collapse control deleted the heading, not the content
 
-**6 `review:` commits, each with its pinning test.** Suite **2907 passed, 1 xfailed**; scrubbed/offline **2906 passed, 1 deselected, 1 xfailed**; `ruff`, `ruff format`, `mypy --strict` green — all on **3.11.15 and 3.12.3**, with `anthropic` absent.
+Someone opened the report in Chromium. **BUG-19:** the toggle marked
+`event.currentTarget.parentNode` — `div.section-title` — not the `<section>`. With
+`.collapsed > *:not(.section-title) { display: none }`, "hide" removed each section's
+`<h2>` **and its own button**, hid nothing, and was unrecoverable without a reload. All
+six sections. `querySelectorAll('[hidden], .hidden, [style*="display:none"]')` → **0**.
 
-### 🔴 Instance twelve
+**Instance thirteen — and the first no test here could have caught.** Nothing in `tests/`
+or CI executes JavaScript. R34's SHA-256 pin proved the bytes hadn't changed and said
+nothing about whether they worked. It made the area *look* covered, which is worse than
+an obvious gap.
 
-`cli/main.py::build_narrative` could send the narrator **any** `rate_snapshot_version`. Wave-7 `V43` put a literal there; it reached the payload *and the rendered paragraph*, in a document whose header printed the real version — **2875 tests green**.
+### The ruling: a real browser, in CI, not behind a marker
 
-Two reasons, both the signature defect: AC12's sentinel sweep runs over a payload the *test* builds (the CLI-equality arm compares `.totals` only; this leaf is its sibling), and the vocabulary arm allows any slug anyway. **S38 is the fix.**
+`tests_browser/` is a second tree with its own CI job that installs Chromium and runs it
+**in full, deselecting nothing**. A marker CI deselects would be instance three with a new
+name. A separate tree, not a marker, because R45 pins that `tests/` passes on `.[dev]`
+alone and R49 forbids `importorskip`/`skipif`. A Python DOM shim was rejected: it can't
+cascade `:not()` or `getComputedStyle`, so it wouldn't have caught *this*.
+`tests/test_browser_suite_wiring.py` (14 tests) fails offline if the job is removed,
+emptied, or grows a `-m`. A static `closest(".section")` assertion is kept — and labelled
+in the file as the constant-checks-a-constant it is.
 
-### Blockers fixed
+**Red before green, shown:** `56abead` 19F/2P → 21P; `4eee41b` 2F/21P → 23P.
 
-- **BUG-14** — `MetricEntry` now refuses a trace-derived *key*. No value-shape check can work: `ghp_`+24 lowercase letters satisfies `AUTHORED_METRIC_VALUE_PATTERN` exactly. R42's property no longer rests on one `if`.
-- **BUG-16** — title classified by type, not caller. **Not shipping v1 with occurrence five open.** The proposed `pattern=` wouldn't fix it (`AKIA…` is letters+digits); reclassified instead. **Zero golden bytes moved.**
-- **BUG-15** — the visible fallback marker is now reserved. Bug, not note: the class is invisible to a reader, and the fix's failure mode *is* the correct outcome.
+**BUG-20 (fixed):** 10 buttons had no `aria-pressed`/`aria-expanded`/`aria-label`. **SVG
+axis/lane labels:** ruled intentional — trace-derived text is kept out of the `<svg>` on
+purpose; a time axis is v1.1.
 
-### Wave 7 — 45 mutants, 42 killed, 3 survived
+**Pins:** `SCRIPT_SHA256` moved twice (once per defect), both goldens regenerated.
+`STYLE_SHA256` unmoved — the CSS was always right.
 
-Survivors: `V30` (equivalent, evidenced) + **both declared control arms**. Ten real gaps closed: the CLI extraction is outside AC12's reach; the corpus has 1 agent and prices nothing (instance nine, one layer down); the fallback branch was never driven.
+**3.11/3.12:** 2921 passed, 1 xfailed; browser 23 passed; ruff/mypy clean.
 
-Also: **AC14's two hook canaries were missing** — the skip hook fails a run via a *private* pytest attribute. Now canaried.
+## ✅ Still merge. Still tag v1.
 
-**C1: discharged**, verified independently. §5 was wrong (BUG-17) — corrected.
-
-Full review: `docs/reviews/feature-so-i5.md`
+Full write-up: `docs/reviews/feature-so-i5.md` §13.

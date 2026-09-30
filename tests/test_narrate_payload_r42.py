@@ -390,24 +390,48 @@ class TestPayloadTypeR42:
                 previews=("a hostile preview",),  # type: ignore[call-arg]
             )
 
-    def test_r42_metric_entry_still_admits_the_one_trace_derived_key(self) -> None:
-        """R42/S33 (**BUG-14**): the documented second refusal does not exist.
+    @pytest.mark.parametrize("key", sorted(TRACE_DERIVED_METRIC_KEYS))
+    def test_r42_metric_entry_refuses_every_trace_derived_key(self, key: str) -> None:
+        """R42/S33/S39 (**BUG-14, fixed by the increment-5 review**): the type refuses the key.
 
-        ``MetricEntry``'s docstring says ``tool_name`` "never reaches this
-        model … and the validator below refuses it a second time so a future
-        caller cannot add it back by hand". It does not. The validator checks
-        the *value*'s alphabet and never looks at the key, and a GitHub token
-        is inside that alphabet — so a caller can put a credential-shaped tool
-        name into the payload by hand and nothing objects.
+        The tester found that ``MetricEntry``'s docstring promised a second,
+        type-level refusal of ``tool_name`` that the validator did not
+        implement — it checked the *value*'s alphabet and never looked at the
+        key — so the whole no-trace-content property rested on one ``if`` in
+        ``summary._metrics``, in the module whose thesis is that it has no
+        filters.
 
-        The property that actually holds is one ``if`` in
-        ``summary._metrics``: a filter, in the module whose thesis is that it
-        is not one. This test pins the gap so a fix (rejecting the key in the
-        validator) turns it red and gets it rewritten.
+        The counter-example that made it a defect rather than a wording bug:
+        ``ghp_`` + twenty-four lowercase letters is a GitHub token that
+        satisfies ``AUTHORED_METRIC_VALUE_PATTERN`` exactly, so no value-shape
+        check can ever reject it. Only the key can.
+
+        Parametrized over ``TRACE_DERIVED_METRIC_KEYS`` rather than over the
+        literal ``"tool_name"``, so a second trace-derived key added in v2 is
+        covered here without anybody remembering to.
+
+        Red when: the key branch is removed from the validator, at which point
+        the payload's safety goes back to being one builder-side filter.
         """
-        entry = MetricEntry(key="tool_name", value="ghp_" + "a" * 24)
-        assert entry.key in TRACE_DERIVED_METRIC_KEYS
-        assert isinstance(entry.value, str)
+        with pytest.raises(ValidationError, match="trace-derived key"):
+            MetricEntry(key=key, value="ghp_" + "a" * 24)
+        with pytest.raises(ValidationError, match="trace-derived key"):
+            MetricEntry(key=key, value=1)
+
+    def test_r42_a_credential_shaped_authored_slug_is_still_admitted_under_another_key(
+        self,
+    ) -> None:
+        """R42 (**BUG-14**): the fix is about the *key*, and nothing wider.
+
+        The control arm for the test above. ``ghp_aaa…`` is a legal authored
+        slug and the value alphabet cannot tell it from one — so under a key
+        R16 does **not** call trace-derived it still constructs, and the
+        refusal above is demonstrably about the key rather than about the
+        needle. If this ever starts raising, the fix has grown into a
+        value-shape check that cannot work.
+        """
+        entry = MetricEntry(key="occurrences", value="ghp_" + "a" * 24)
+        assert entry.key not in TRACE_DERIVED_METRIC_KEYS
         request = a_request(
             groups=(
                 a_group(
@@ -425,12 +449,13 @@ class TestPayloadTypeR42:
         )
         assert entry.value in serialize_request(request)
 
-    def test_r42_the_builder_is_the_only_thing_that_drops_tool_name(self) -> None:
-        """R42/S33: ``summary`` drops the key the type would have accepted.
+    def test_r42_the_builder_drops_tool_name_before_the_type_has_to(self) -> None:
+        """R42/S33: ``summary`` drops the key, and since BUG-14's fix the type refuses it too.
 
-        The complement of the test above, and the pair is the evidence for the
-        verdict on "structural, not filtered": construction accepts it, the
-        builder removes it.
+        The complement of the tests above. Both layers now hold, which is what
+        turns "structural, not filtered" from a claim about the builder into a
+        claim about the payload: the builder drops it, and a caller who
+        bypasses the builder is refused at construction.
         """
         finding = build_finding(
             trace=_a_trace(),

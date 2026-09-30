@@ -69,6 +69,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from swarm_observer.detect.base import (
     AUTHORED_METRIC_VALUE_PATTERN,
     SEVERITIES,
+    TRACE_DERIVED_METRIC_KEYS,
     Severity,
 )
 from swarm_observer.detect.registry import ALL_DETECTORS, DETECTOR_SLUGS
@@ -207,18 +208,37 @@ class _Frozen(BaseModel):
 class MetricEntry(_Frozen):
     """One ``Finding.metrics`` pair the narrator is allowed to see (R42).
 
-    ``value`` is an ``int`` or an **authored** slug. The trace-derived key R16
-    admits (``tool_name``) never reaches this model: :mod:`.summary` drops it
-    by consulting ``detect.base.TRACE_DERIVED_METRIC_KEYS`` rather than by
-    listing keys, and the validator below refuses it a second time so a future
-    caller cannot add it back by hand. See S33.
+    ``value`` is an ``int`` or an **authored** slug, and ``key`` is a metrics
+    key R16 does *not* list as trace-derived. Both halves are refused here,
+    which is the point of the class: :mod:`.summary` drops ``tool_name`` by
+    consulting ``detect.base.TRACE_DERIVED_METRIC_KEYS``, and this model
+    refuses it a second time so a future caller cannot add it back by hand.
+
+    **The key check is load-bearing and was missing until the increment-5
+    review (BUG-14).** It cannot be replaced by the value check, because the
+    two alphabets are the same one: ``AUTHORED_METRIC_VALUE_PATTERN`` is
+    ``[a-z][a-z0-9_]{0,63}``, and ``ghp_`` followed by twenty-four lowercase
+    letters is inside it. A *shape* cannot tell a slug this package authored
+    from a slug a trace supplied — only the **key** can, which is why R16
+    enumerates the trace-derived keys in the first place. Without this branch
+    the whole no-trace-content property rested on one ``if`` in the builder,
+    in the module whose thesis is that it has no filters. See S33, S39.
+
+    Both branches consult :data:`~swarm_observer.detect.base.TRACE_DERIVED_METRIC_KEYS`
+    rather than naming ``tool_name``, so a second trace-derived metric key
+    added in v2 is refused here without anybody remembering to.
     """
 
     key: str = Field(pattern=METRIC_KEY_PATTERN)
     value: int | str
 
     @model_validator(mode="after")
-    def _value_is_authored(self) -> MetricEntry:
+    def _key_and_value_are_authored(self) -> MetricEntry:
+        if self.key in TRACE_DERIVED_METRIC_KEYS:
+            raise ValueError(
+                f"metrics[{self.key!r}] is a trace-derived key (R16); the narrator "
+                "payload carries no trace-derived string (R42)"
+            )
         if isinstance(self.value, str) and not re.fullmatch(
             AUTHORED_METRIC_VALUE_PATTERN, self.value
         ):
